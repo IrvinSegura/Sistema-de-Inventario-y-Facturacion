@@ -153,6 +153,7 @@ erDiagram
         bigint purchase_id FK "optional"
         bigint sale_id FK "optional"
         varchar reason "required for ADJUSTMENT"
+        uuid idempotency_key UK "optional, ADJUSTMENT only (V8)"
         bigint user_id FK
         timestamptz movement_date "clock_timestamp()"
     }
@@ -185,6 +186,10 @@ erDiagram
 | Emails stored lowercase (`CHECK (email = LOWER(email))`) with a plain unique index | Case-insensitive uniqueness and indexed login lookups. |
 | VAT rate per product (`tax_rate`: 0% basic food, 16% general); tax computed and rounded per line (HALF_UP); `sale.tax` = sum of line taxes | Mexican grocery store: sugar or rice pay 0%, soda or snacks 16%. |
 | Money as `NUMERIC(12,2)` / `BigDecimal`; `sale_price` is pre-tax | No floating-point rounding errors; totals computed server-side. |
+| Manual adjustments are signed `ADJUSTMENT` movements (one atomic CTE with `stock + qty >= 0`), allowed on inactive products | Shrinkage, damage and count differences are corrected without ever going negative; discontinued products still need their remaining units written off. |
+| Optional `Idempotency-Key` on adjustments, stored on the movement (V8, partial unique index, only for `ADJUSTMENT`) | A retried "-5 damaged" must not remove 10 units. Adjustments have no document table, so the key lives on the movement; the partial index keeps sale and purchase rows out. |
+| Stock ledger read per product (`productId` required, 404 if the product doesn't exist), newest first, in one `REPEATABLE READ` snapshot | Uses `ix_inventory_movement_product_date`; a store-wide ledger would scan the most write-heavy table. The page and its total count come from the same snapshot. Offset paging over a growing ledger can shift: clients keep the first request's `to` while paging. |
+| `product.stock` is `INTEGER` | Overflow needs over 2.1 billion units of one product; accepted, it would surface as a generic 409. |
 | Sales reports aggregate in SQL inside one `REPEATABLE READ` read-only transaction with a 10 s timeout; the period is validated before it starts | Totals and breakdowns come from the same snapshot, so they agree even while sales are being recorded; no sale rows are loaded into memory. A heavy or invalid report never holds a pool connection the checkout needs. |
 | Report days follow `app.store.time-zone` (a region ID such as `America/Mexico_City`; offsets are rejected); periods are inclusive calendar days, up to 366, between 2000-01-01 and 9999-12-30 | Dates are stored in UTC, but "sales on Oct 1" means the store's local day. PostgreSQL converts both the period bounds and each sale's day (`AT TIME ZONE`), so filter and daily breakdown always agree; it reads offsets like `-06:00` with an inverted sign. |
 | Sales by period count only `COMPLETED` sales; cancelled ones are reported separately, on the day of the sale | Cancelled sales returned their stock and money, but the count is still useful for audits. A cancellation can change an already closed day; a cash-closing report by `cancelled_at` would be a separate view. |
@@ -217,5 +222,6 @@ Details live in `V1__initial-schema.sql`. Criteria:
 | View sales | ✅ | Own sales only |
 | Cancel sales | ✅ | ❌ |
 | Manual stock adjustments | ✅ | ❌ |
+| View the stock ledger | ✅ | ❌ |
 | Sales reports | ✅ | Own sales only |
 | Low-stock report | ✅ | ✅ |
