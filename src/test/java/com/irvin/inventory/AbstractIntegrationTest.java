@@ -155,6 +155,31 @@ public abstract class AbstractIntegrationTest {
         return letters + "990101" + random.nextInt(100, 1000);
     }
 
+    protected String sellerToken() throws Exception {
+        return loginOk(createSeller().email(), DEFAULT_PASSWORD).accessToken();
+    }
+
+    // Unique SKU per call, in the seeded Pantry category.
+    protected Long createPricedProduct(String salePrice, String taxRate) throws Exception {
+        return readId(postJson("/api/v1/products", """
+                {"sku": "%s", "name": "Sale product", "categoryId": %d, "salePrice": %s, "taxRate": %s, "minStock": 0}
+                """.formatted(uniqueSku(), categoryId("Pantry"), salePrice, taxRate), adminAccessToken())
+                .andExpect(status().isCreated()));
+    }
+
+    // Purchases are the only way to add stock.
+    protected void addStock(Long productId, int quantity) throws Exception {
+        postJson("/api/v1/purchases", """
+                {"supplierId": %d, "items": [{"productId": %d, "quantity": %d, "unitCost": 1}]}
+                """.formatted(createSupplier(), productId, quantity), adminAccessToken())
+                .andExpect(status().isCreated());
+    }
+
+    // Sales require an Idempotency-Key; a fresh one per call records a new sale.
+    protected ResultActions sell(String body, String token) throws Exception {
+        return postJson("/api/v1/sales", body, token, UUID.randomUUID());
+    }
+
     protected Long createCustomer() throws Exception {
         return readId(postJson("/api/v1/customers", """
                 {"name": "Customer %s"}
