@@ -537,25 +537,6 @@ class SaleControllerIT extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.content.length()").value(0));
     }
 
-    private String sellerToken() throws Exception {
-        return loginOk(createSeller().email(), DEFAULT_PASSWORD).accessToken();
-    }
-
-    private Long createPricedProduct(String salePrice, String taxRate) throws Exception {
-        return readId(postJson("/api/v1/products", """
-                {"sku": "%s", "name": "Sale product", "categoryId": %d, "salePrice": %s, "taxRate": %s, "minStock": 0}
-                """.formatted(uniqueSku(), categoryId("Pantry"), salePrice, taxRate), adminAccessToken())
-                .andExpect(status().isCreated()));
-    }
-
-    // Purchases are the only way to add stock.
-    private void addStock(Long productId, int quantity) throws Exception {
-        postJson("/api/v1/purchases", """
-                {"supplierId": %d, "items": [{"productId": %d, "quantity": %d, "unitCost": 1}]}
-                """.formatted(createSupplier(), productId, quantity), adminAccessToken())
-                .andExpect(status().isCreated());
-    }
-
     private void deactivate(Long productId, String adminToken) throws Exception {
         String sku = jdbcTemplate.queryForObject("SELECT sku FROM product WHERE id = ?", String.class, productId);
         Long version = jdbcTemplate.queryForObject("SELECT version FROM product WHERE id = ?", Long.class, productId);
@@ -563,10 +544,6 @@ class SaleControllerIT extends AbstractIntegrationTest {
                 {"sku": "%s", "name": "Old", "categoryId": %d, "salePrice": 1, "taxRate": 0,
                  "minStock": 0, "active": false, "version": %d}
                 """.formatted(sku, categoryId("Pantry"), version), adminToken).andExpect(status().isOk());
-    }
-
-    private ResultActions sell(String body, String token) throws Exception {
-        return postJson("/api/v1/sales", body, token, UUID.randomUUID());
     }
 
     private int stock(Long productId) {

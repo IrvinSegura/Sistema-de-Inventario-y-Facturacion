@@ -8,6 +8,7 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Query;
 
 // Category is fetched eagerly in reads that return it, avoiding N+1 queries.
 public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpecificationExecutor<Product> {
@@ -22,6 +23,19 @@ public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpec
     // Checkout scan: inactive products are not sellable.
     @EntityGraph(attributePaths = "category")
     Optional<Product> findByBarcodeAndActiveTrue(String barcode);
+
+    // Reorder list: active products at or below their minimum. Out of stock first (they can't
+    // be sold at all), then furthest below the minimum.
+    @Query(value = """
+            select p from Product p join fetch p.category
+            where p.active = true and p.stock <= p.minStock
+              and (:categoryId is null or p.category.id = :categoryId)
+            order by case when p.stock = 0 then 0 else 1 end, (p.stock - p.minStock), p.name, p.id""",
+            countQuery = """
+            select count(p) from Product p
+            where p.active = true and p.stock <= p.minStock
+              and (:categoryId is null or p.category.id = :categoryId)""")
+    Page<Product> findLowStock(Long categoryId, Pageable pageable);
 
     boolean existsBySku(String sku);
 
