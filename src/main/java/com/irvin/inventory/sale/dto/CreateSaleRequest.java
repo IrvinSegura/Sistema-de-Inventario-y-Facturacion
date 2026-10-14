@@ -2,6 +2,7 @@ package com.irvin.inventory.sale.dto;
 
 import java.util.List;
 
+import com.irvin.inventory.common.validation.LineLimits;
 import com.irvin.inventory.sale.PaymentMethod;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -20,6 +21,6 @@ public record CreateSaleRequest(
 
     public record Item(
             @NotNull Long productId,
-            @NotNull @Positive @Max(100_000) Integer quantity) {
+            @NotNull @Positive @Max(LineLimits.MAX_QUANTITY) Integer quantity) {
     }
 }

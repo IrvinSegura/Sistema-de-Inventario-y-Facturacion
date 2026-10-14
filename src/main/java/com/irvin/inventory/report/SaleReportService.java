@@ -7,6 +7,7 @@ import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
 
+import com.irvin.inventory.common.DateBounds;
 import com.irvin.inventory.common.exception.BadRequestException;
 import com.irvin.inventory.config.StoreProperties;
 import com.irvin.inventory.report.dto.SaleReportResponse;
@@ -24,9 +25,6 @@ public class SaleReportService {
 
     // A year (leap years included): bounds the daily breakdown and the scanned rows.
     static final int MAX_DAYS = 366;
-    // Absolute bounds: extreme years overflow Java dates or PostgreSQL timestamps (500 instead of 400).
-    static final LocalDate MIN_DATE = LocalDate.of(2000, 1, 1);
-    static final LocalDate MAX_DATE = LocalDate.of(9999, 12, 30);
     // Seconds; JdbcTemplate turns the transaction timeout into a statement timeout.
     private static final int TIMEOUT_SECONDS = 10;
     private static final int MONEY_SCALE = 2;
@@ -51,8 +49,9 @@ public class SaleReportService {
 
     // Validated before the transaction starts, so invalid requests never take a pool connection.
     public SaleReportResponse salesReport(LocalDate from, LocalDate to, Long sellerId, CurrentUser viewer) {
-        if (from.isBefore(MIN_DATE) || to.isAfter(MAX_DATE)) {
-            throw new BadRequestException("Dates must be between " + MIN_DATE + " and " + MAX_DATE);
+        if (from.isBefore(DateBounds.MIN_DATE) || to.isAfter(DateBounds.MAX_DATE)) {
+            throw new BadRequestException(
+                    "Dates must be between " + DateBounds.MIN_DATE + " and " + DateBounds.MAX_DATE);
         }
         if (from.isAfter(to)) {
             throw new BadRequestException("'from' must not be after 'to'");

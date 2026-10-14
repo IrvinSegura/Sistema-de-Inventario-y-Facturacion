@@ -9,14 +9,8 @@ import java.util.concurrent.ThreadLocalRandom;
 
 import com.irvin.inventory.AbstractIntegrationTest;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.jdbc.core.JdbcTemplate;
 
 class ProductControllerIT extends AbstractIntegrationTest {
-
-    // Stock has no API yet (purchases will set it), so tests set it directly.
-    @Autowired
-    private JdbcTemplate jdbcTemplate;
 
     @Test
     void createUsesCategoryTaxRateAndStartsWithZeroStock() throws Exception {
@@ -238,6 +232,7 @@ class ProductControllerIT extends AbstractIntegrationTest {
         return id;
     }
 
+    // Catalog tests set stock directly to stay independent of the purchasing and stock modules.
     private void setStock(Long productId, int stock) {
         jdbcTemplate.update("UPDATE product SET stock = ? WHERE id = ?", stock, productId);
     }
