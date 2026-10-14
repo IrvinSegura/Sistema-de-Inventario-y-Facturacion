@@ -83,6 +83,7 @@ erDiagram
         varchar phone
         varchar address
         boolean active
+        bigint version "optimistic lock (V6)"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -119,7 +120,7 @@ erDiagram
         timestamptz cancelled_at "set when cancelled"
         bigint cancelled_by FK "set when cancelled"
         varchar cancellation_reason "set when cancelled"
-        uuid idempotency_key UK "optional"
+        uuid idempotency_key UK "required (V7)"
     }
 
     sale_item {
@@ -163,26 +164,29 @@ erDiagram
 |---|---|
 | Stock decremented with `UPDATE ... SET stock = stock - :qty WHERE id = :id AND stock >= :qty RETURNING stock`, backed by `CHECK (stock >= 0)` | Two sellers selling the last unit at once: only one succeeds. |
 | `Product.stock` mapped `insertable = false, updatable = false` | Otherwise an admin editing the price could overwrite stock with a stale value and silently undo sales. |
-| `version` on product, category and supplier; clients send the version they loaded | Concurrent catalog edits are detected (409) instead of silently overwritten; doesn't cover stock, so it never conflicts with sales. |
+| `version` on product, category, supplier and customer; clients send the version they loaded | Concurrent catalog edits are detected (409) instead of silently overwritten; doesn't cover stock, so it never conflicts with sales. |
 | Category locked before product: FOR SHARE to assign/activate a product, FOR UPDATE to deactivate | An active product never ends up in an inactive category, even under concurrent edits. |
+| Purchases lock the supplier and sales the customer `FOR SHARE` before any product | The supplier or customer can't be deactivated while a document that uses it is being recorded. |
 | Lock products in `product_id` order; `lock_timeout = 5s` | Prevents deadlocks between multi-product sales and endless waits on hot rows. |
 | Stock written only by `InventoryMovementRepository`: one CTE per line (`UPDATE product ... AND active RETURNING stock` + `INSERT inventory_movement`) | The stock change and its movement happen while the row is locked, so `resulting_stock` is exact under concurrency and no movement can be forgotten. |
 | Idempotency: transaction-scoped advisory lock on `scope:key`, then lookup; same key with a different payload → 409 | Concurrent retries (double click) record exactly one document. |
-| `idempotency_key` on sale and purchase | A double click or retry returns the existing document instead of creating a duplicate. |
+| `idempotency_key` on sale (required, V7) and purchase (optional) | A double click or retry returns the existing document instead of creating a duplicate. Double clicks are common at the checkout; purchases are recorded only by admins. A sale key reused by another seller is a 409, so it never reveals their sale. |
 | Atomic cancellation (`UPDATE sale SET status = 'CANCELLED', cancelled_at, cancelled_by, cancellation_reason WHERE id = :id AND status = 'COMPLETED'`) + unique index per (sale, product, type) | Concurrent cancellations can't return stock twice; who, when and why is always recorded (enforced by `ck_sale_status`). |
+| Only ADMIN changes a customer's tax ID or `active` flag (403 for sellers) | Sales reference the customer, so past receipts show its current tax ID; deactivating it blocks every checkout. Sellers still register customers and fix contact data. |
+| Cancellation returns stock even to products deactivated after the sale | The goods are physically back on the shelf; the product just can't be sold until it's reactivated. |
 | `barcode` (optional, unique, 8-14 digits) separate from `sku` | Grocery items are sold by scanning; `sku` stays as the internal code, also for unlabeled items. |
 | `image_url` only; images live in object storage (Cloudinary/S3) | Binary files bloat and slow down the DB. |
 | `payment_method` on sale | Needed for reports and cash closing. |
 | `resulting_stock` from `RETURNING`; `movement_date` uses `clock_timestamp()` | The ledger stays consistent and correctly ordered under concurrency. |
 | `sale_number` from a DB sequence, mapped with `@Generated(event = INSERT)` | `MAX()+1` duplicates numbers; `@Generated` reads the value back. |
-| `unit_price` and `tax_rate` copied into `sale_item` | Past sales keep their original price and tax. |
+| `unit_price` and `tax_rate` copied into `sale_item`, read before the product row is locked | Past sales keep their original price and tax. A price edited at the same instant leaves the sale with the price the checkout saw, which is acceptable. |
 | Seeded grocery categories with `default_tax_rate` (Pantry, Dairy, Bakery 0%; Beverages, Snacks, Cleaning, Personal Care 16%) | Pre-fills the product VAT so classification errors are less likely; each product can still override it. |
 | Refresh tokens stored as SHA-256 hashes, rotated on every use; reuse of a `ROTATED` token revokes all of the user's sessions; expired ones deleted daily | Stolen refresh tokens are detected without logging users out for a stale logged-out token; a DB leak doesn't expose usable tokens. |
 | Emails stored lowercase (`CHECK (email = LOWER(email))`) with a plain unique index | Case-insensitive uniqueness and indexed login lookups. |
 | VAT rate per product (`tax_rate`: 0% basic food, 16% general); tax computed and rounded per line (HALF_UP); `sale.tax` = sum of line taxes | Mexican grocery store: sugar or rice pay 0%, soda or snacks 16%. |
 | Money as `NUMERIC(12,2)` / `BigDecimal`; `sale_price` is pre-tax | No floating-point rounding errors; totals computed server-side. |
 | Sales are cancelled, catalogs soft-deleted (`active`) | History is never broken. |
-| Seeded "PUBLICO EN GENERAL" customer (`XAXX010101000`), looked up by tax ID constant | Every sale has a customer, as Mexican invoicing requires. |
+| Seeded "PUBLICO EN GENERAL" customer (`XAXX010101000`), looked up by tax ID constant and read-only through the API | Every sale has a customer, as Mexican invoicing requires; sales without `customerId` fall back to it, so it can't be renamed or deactivated. |
 | First ADMIN created at startup from `ADMIN_EMAIL` / `ADMIN_PASSWORD` | A password hash in a migration would be a versioned credential. |
 | `BIGINT IDENTITY` ids, `TIMESTAMPTZ` dates | PostgreSQL standard; time zone-safe reports. |
 
@@ -203,8 +207,10 @@ Details live in `V1__initial-schema.sql`. Criteria:
 | Manage products, categories, suppliers | ✅ | ❌ |
 | View products and stock | ✅ | ✅ |
 | Record purchases | ✅ | ❌ |
-| Manage customers | ✅ | ✅ |
+| Create customers and edit their contact data | ✅ | ✅ |
+| Change a customer's tax ID or deactivate it | ✅ | ❌ |
 | Record sales | ✅ | ✅ |
+| View sales | ✅ | Own sales only |
 | Cancel sales | ✅ | ❌ |
 | Manual stock adjustments | ✅ | ❌ |
 | Reports | ✅ | Own sales only |

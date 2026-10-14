@@ -7,7 +7,10 @@ REST API for a grocery store: inventory, supplier purchases and sales with basic
 - JWT authentication with `ADMIN` and `SELLER` roles.
 - Product catalog with categories, per-product VAT (0% / 16%), barcode lookup and search.
 - Supplier purchases with concurrency-safe stock, a full stock ledger and idempotent requests.
-- Planned: sales, customers and reports.
+- Customers, with SAT's walk-in customer ("PUBLICO EN GENERAL") as the default.
+- Sales with server-side prices and per-line VAT, sequential sale numbers, a required `Idempotency-Key` and
+  atomic cancellation that returns stock. Stock never goes negative, even when sellers race for the last unit.
+- Planned: reports.
 
 Database design: [docs/data-model.md](docs/data-model.md).
 
