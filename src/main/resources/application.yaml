@@ -22,6 +22,10 @@ spring:
       hibernate:
         jdbc:
           time_zone: UTC
+  jackson:
+    deserialization:
+      # Reject 2.5 for integer fields such as quantity instead of truncating it to 2.
+      accept-float-as-int: false
   data:
     web:
       pageable:

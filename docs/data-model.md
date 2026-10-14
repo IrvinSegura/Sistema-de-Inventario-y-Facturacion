@@ -38,6 +38,7 @@ erDiagram
         varchar name UK "case-insensitive"
         varchar description
         numeric default_tax_rate "suggested VAT for new products"
+        bigint version "optimistic lock (V3)"
         boolean active
         timestamptz created_at
         timestamptz updated_at
@@ -52,7 +53,7 @@ erDiagram
         varchar image_url "object storage URL, optional"
         bigint category_id FK
         numeric sale_price "pre-tax"
-        numeric tax_rate "0.0000 or 0.1600"
+        numeric tax_rate "fraction, usually 0 or 0.16"
         int stock "CHECK >= 0, atomic UPDATE only"
         int min_stock "low-stock alert"
         boolean active
@@ -69,6 +70,7 @@ erDiagram
         varchar phone
         varchar address
         boolean active
+        bigint version "optimistic lock (V5)"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -161,8 +163,11 @@ erDiagram
 |---|---|
 | Stock decremented with `UPDATE ... SET stock = stock - :qty WHERE id = :id AND stock >= :qty RETURNING stock`, backed by `CHECK (stock >= 0)` | Two sellers selling the last unit at once: only one succeeds. |
 | `Product.stock` mapped `insertable = false, updatable = false` | Otherwise an admin editing the price could overwrite stock with a stale value and silently undo sales. |
-| `version` on product | Optimistic locking for catalog edits; doesn't cover stock, so it never conflicts with sales. |
+| `version` on product, category and supplier; clients send the version they loaded | Concurrent catalog edits are detected (409) instead of silently overwritten; doesn't cover stock, so it never conflicts with sales. |
+| Category locked before product: FOR SHARE to assign/activate a product, FOR UPDATE to deactivate | An active product never ends up in an inactive category, even under concurrent edits. |
 | Lock products in `product_id` order; `lock_timeout = 5s` | Prevents deadlocks between multi-product sales and endless waits on hot rows. |
+| Stock written only by `InventoryMovementRepository`: one CTE per line (`UPDATE product ... AND active RETURNING stock` + `INSERT inventory_movement`) | The stock change and its movement happen while the row is locked, so `resulting_stock` is exact under concurrency and no movement can be forgotten. |
+| Idempotency: transaction-scoped advisory lock on `scope:key`, then lookup; same key with a different payload → 409 | Concurrent retries (double click) record exactly one document. |
 | `idempotency_key` on sale and purchase | A double click or retry returns the existing document instead of creating a duplicate. |
 | Atomic cancellation (`UPDATE sale SET status = 'CANCELLED', cancelled_at, cancelled_by, cancellation_reason WHERE id = :id AND status = 'COMPLETED'`) + unique index per (sale, product, type) | Concurrent cancellations can't return stock twice; who, when and why is always recorded (enforced by `ck_sale_status`). |
 | `barcode` (optional, unique, 8-14 digits) separate from `sku` | Grocery items are sold by scanning; `sku` stays as the internal code, also for unlabeled items. |
@@ -186,6 +191,7 @@ erDiagram
 Details live in `V1__initial-schema.sql`. Criteria:
 
 - Every queried FK is indexed. The `UNIQUE (document_id, product_id)` constraints on line items also cover the document FK.
+- Trigram (GIN, `pg_trgm`) indexes on `lower(name)` and `lower(sku)` for product substring search (V4).
 - Date indexes for reports: `sale(sale_date)`, `purchase(purchase_date)`, `sale(user_id, sale_date)` and `inventory_movement(product_id, movement_date)`.
 - `stock` is not indexed: it's the hottest column and the low-stock report scans a small catalog.
 
