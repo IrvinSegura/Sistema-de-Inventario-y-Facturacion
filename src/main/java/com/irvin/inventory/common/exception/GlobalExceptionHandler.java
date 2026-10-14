@@ -1,9 +1,11 @@
 package com.irvin.inventory.common.exception;
 
+import java.sql.SQLException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 import lombok.extern.slf4j.Slf4j;
+import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.dao.PessimisticLockingFailureException;
@@ -35,6 +37,11 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
     }
 
+    @ExceptionHandler(ForbiddenException.class)
+    ProblemDetail handleForbidden(ForbiddenException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, ex.getMessage());
+    }
+
     @ExceptionHandler(ConflictException.class)
     ProblemDetail handleConflict(ConflictException ex) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
@@ -48,7 +55,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     // Constraint races (e.g. two requests creating the same email); logged since it may hide a bug.
     @ExceptionHandler(DataIntegrityViolationException.class)
     ProblemDetail handleDataIntegrityViolation(DataIntegrityViolationException ex) {
-        log.warn("Data integrity violation: {}", ex.getMostSpecificCause().getMessage());
+        log.warn("Data integrity violation: {}", describeViolation(ex));
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, "The request conflicts with existing data");
     }
 
@@ -80,5 +87,18 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         body.setDetail("Validation failed");
         body.setProperty("errors", errors);
         return handleExceptionInternal(ex, body, headers, status, request);
+    }
+
+    // Constraint name or SQLState only: the driver message includes the duplicated values (e.g. a tax ID).
+    private static String describeViolation(DataIntegrityViolationException ex) {
+        for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ConstraintViolationException violation && violation.getConstraintName() != null) {
+                return "constraint " + violation.getConstraintName();
+            }
+            if (cause instanceof SQLException sql) {
+                return "SQLState " + sql.getSQLState();
+            }
+        }
+        return "unknown cause";
     }
 }

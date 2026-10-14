@@ -4,7 +4,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.UUID;
-import java.util.concurrent.ThreadLocalRandom;
 
 import com.irvin.inventory.AbstractIntegrationTest;
 import org.junit.jupiter.api.Test;
@@ -85,16 +84,6 @@ class SupplierControllerIT extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.content[0].name").value(tag + " Lala"));
         getJson("/api/v1/suppliers?search=" + tag + "&active=false", adminToken)
                 .andExpect(jsonPath("$.content.length()").value(0));
-    }
-
-    // Company tax ID (RFC): 3 letters + YYMMDD + 3 chars; random letters and suffix keep it unique across tests.
-    private static String randomCompanyTaxId() {
-        ThreadLocalRandom random = ThreadLocalRandom.current();
-        StringBuilder letters = new StringBuilder();
-        for (int i = 0; i < 3; i++) {
-            letters.append((char) ('A' + random.nextInt(26)));
-        }
-        return letters + "990101" + random.nextInt(100, 1000);
     }
 
     private static String supplierBody(String taxId) {

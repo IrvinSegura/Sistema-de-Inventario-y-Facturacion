@@ -13,6 +13,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.ThreadLocalRandom;
 
 import com.jayway.jsonpath.JsonPath;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -142,6 +143,23 @@ public abstract class AbstractIntegrationTest {
 
     protected static String uniqueSku() {
         return "SKU-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+    }
+
+    // Company tax ID (RFC): 3 letters + YYMMDD + 3 chars; random letters and suffix keep it unique across tests.
+    protected static String randomCompanyTaxId() {
+        ThreadLocalRandom random = ThreadLocalRandom.current();
+        StringBuilder letters = new StringBuilder();
+        for (int i = 0; i < 3; i++) {
+            letters.append((char) ('A' + random.nextInt(26)));
+        }
+        return letters + "990101" + random.nextInt(100, 1000);
+    }
+
+    protected Long createCustomer() throws Exception {
+        return readId(postJson("/api/v1/customers", """
+                {"name": "Customer %s"}
+                """.formatted(UUID.randomUUID()), adminAccessToken())
+                .andExpect(status().isCreated()));
     }
 
     protected ResultActions postJson(String url, String json, String accessToken, UUID idempotencyKey)
