@@ -5,7 +5,14 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import com.jayway.jsonpath.JsonPath;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -79,20 +86,99 @@ public abstract class AbstractIntegrationTest {
     // Unique email per call so tests sharing the database don't collide.
     protected CreatedUser createUser(String role) throws Exception {
         String email = role.toLowerCase() + "-" + UUID.randomUUID() + "@test.com";
-        String body = postJson("/api/v1/users", """
+        Long id = readId(postJson("/api/v1/users", """
                 {"name": "Test User", "email": "%s", "password": "%s", "role": "%s"}
                 """.formatted(email, DEFAULT_PASSWORD, role), adminAccessToken())
-                .andExpect(status().isCreated())
-                .andReturn().getResponse().getContentAsString();
-        return new CreatedUser(((Number) JsonPath.read(body, "$.id")).longValue(), email);
+                .andExpect(status().isCreated()));
+        return new CreatedUser(id, email);
     }
 
     protected CreatedUser createSeller() throws Exception {
         return createUser("SELLER");
     }
 
-    private static MockHttpServletRequestBuilder withToken(MockHttpServletRequestBuilder request, String token) {
+    // Seeded by V2 (Pantry, Dairy, Bakery, Beverages, Snacks, Cleaning, Personal Care).
+    protected Long categoryId(String name) throws Exception {
+        String body = getJson("/api/v1/categories?includeInactive=true", adminAccessToken())
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        List<Number> ids = JsonPath.read(body, "$[?(@.name == '" + name + "')].id");
+        if (ids.isEmpty()) {
+            throw new IllegalArgumentException("No category named " + name);
+        }
+        return ids.getFirst().longValue();
+    }
+
+    protected Long createCategory(String name) throws Exception {
+        return readId(postJson("/api/v1/categories", """
+                {"name": "%s", "defaultTaxRate": 0}
+                """.formatted(name), adminAccessToken())
+                .andExpect(status().isCreated()));
+    }
+
+    protected Long createProduct(Long categoryId, int minStock) throws Exception {
+        return createProduct("Test product", categoryId, minStock);
+    }
+
+    // Unique SKU per call.
+    protected Long createProduct(String name, Long categoryId, int minStock) throws Exception {
+        return readId(postJson("/api/v1/products", """
+                {"sku": "%s", "name": "%s", "categoryId": %d, "salePrice": 10.00, "minStock": %d}
+                """.formatted(uniqueSku(), name, categoryId, minStock), adminAccessToken())
+                .andExpect(status().isCreated()));
+    }
+
+    protected Long createSupplier() throws Exception {
+        return readId(postJson("/api/v1/suppliers", """
+                {"name": "Supplier %s"}
+                """.formatted(UUID.randomUUID()), adminAccessToken())
+                .andExpect(status().isCreated()));
+    }
+
+    protected static Long readId(ResultActions result) throws Exception {
+        String body = result.andReturn().getResponse().getContentAsString();
+        return ((Number) JsonPath.read(body, "$.id")).longValue();
+    }
+
+    protected static String uniqueSku() {
+        return "SKU-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+    }
+
+    protected ResultActions postJson(String url, String json, String accessToken, UUID idempotencyKey)
+            throws Exception {
+        return mockMvc.perform(withToken(post(url), accessToken)
+                .header("Idempotency-Key", idempotencyKey.toString())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json));
+    }
+
+    protected static MockHttpServletRequestBuilder withToken(MockHttpServletRequestBuilder request, String token) {
         return request.header(HttpHeaders.AUTHORIZATION, "Bearer " + token);
+    }
+
+    // Runs the tasks in parallel, released at the same moment to maximize contention.
+    // Prepare tokens and data before calling: slow work inside a task spreads the requests out.
+    protected static <T> List<T> runConcurrently(List<Callable<T>> tasks) throws Exception {
+        CountDownLatch start = new CountDownLatch(1);
+        try (ExecutorService executor = Executors.newFixedThreadPool(tasks.size())) {
+            List<Future<T>> futures = new ArrayList<>();
+            for (Callable<T> task : tasks) {
+                futures.add(executor.submit(() -> {
+                    start.await();
+                    return task.call();
+                }));
+            }
+            start.countDown();
+            List<T> results = new ArrayList<>();
+            for (Future<T> future : futures) {
+                results.add(future.get());
+            }
+            return results;
+        }
+    }
+
+    protected static int httpStatus(ResultActions result) {
+        return result.andReturn().getResponse().getStatus();
     }
 
     private static String refreshBody(String refreshToken) {

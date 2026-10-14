@@ -5,8 +5,9 @@ REST API for a grocery store: inventory, supplier purchases and sales with basic
 ## Features
 
 - JWT authentication with `ADMIN` and `SELLER` roles.
-- Concurrency-safe stock with a full inventory ledger.
-- Per-product VAT (0% / 16%), sale cancellation and idempotent requests.
+- Product catalog with categories, per-product VAT (0% / 16%), barcode lookup and search.
+- Supplier purchases with concurrency-safe stock, a full stock ledger and idempotent requests.
+- Planned: sales, customers and reports.
 
 Database design: [docs/data-model.md](docs/data-model.md).
 
@@ -24,6 +25,8 @@ Requires JDK 21 and Docker.
 ```bash
 ./mvnw spring-boot:run
 ```
+
+API docs: http://localhost:8080/swagger-ui.html
 
 ## Tests
 
