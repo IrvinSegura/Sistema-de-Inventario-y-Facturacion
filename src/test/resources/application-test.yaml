@@ -1,0 +1,7 @@
+app:
+  jwt:
+    # Test-only key (Base64 of "test-only-hs256-secret-not-for-production!").
+    secret: dGVzdC1vbmx5LWhzMjU2LXNlY3JldC1ub3QtZm9yLXByb2R1Y3Rpb24h
+  admin:
+    email: admin@test.com
+    password: admin-password

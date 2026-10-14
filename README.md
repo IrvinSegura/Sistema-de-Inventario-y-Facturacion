@@ -1,0 +1,40 @@
+# Inventory Billing System
+
+REST API for a grocery store: inventory, supplier purchases and sales with basic billing.
+
+## Features
+
+- JWT authentication with `ADMIN` and `SELLER` roles.
+- Concurrency-safe stock with a full inventory ledger.
+- Per-product VAT (0% / 16%), sale cancellation and idempotent requests.
+
+Database design: [docs/data-model.md](docs/data-model.md).
+
+## Stack
+
+Java 21 · Spring Boot 4 · Spring Security · PostgreSQL 17 · Flyway · Docker · Testcontainers
+
+## Run locally
+
+Requires JDK 21 and Docker.
+
+1. Copy `.env.example` to `.env` and fill in the values.
+2. Run:
+
+```bash
+./mvnw spring-boot:run
+```
+
+## Tests
+
+```bash
+./mvnw verify
+```
+
+## Environment variables
+
+| Variable | Description |
+|---|---|
+| `SPRING_DATASOURCE_URL` / `_USERNAME` / `_PASSWORD` | PostgreSQL connection (production) |
+| `JWT_SECRET` | Base64, at least 32 bytes (`openssl rand -base64 32`) |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Initial admin, created if none exists |

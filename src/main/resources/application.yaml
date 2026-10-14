@@ -1,3 +1,38 @@
 spring:
   application:
-    name: sistema-inventario-facturacion
+    name: inventory-billing-system
+  config:
+    # Local secrets (git-ignored); see .env.example.
+    import: optional:file:.env[.properties]
+  docker:
+    compose:
+      # Keep PostgreSQL running between restarts for faster dev cycles.
+      lifecycle-management: start-only
+  datasource:
+    hikari:
+      # Fail fast (SQLSTATE 55P03) instead of holding a pool connection on a locked row.
+      connection-init-sql: "SET lock_timeout = '5s'"
+  jpa:
+    hibernate:
+      # Flyway owns the schema; Hibernate only validates it.
+      ddl-auto: validate
+    # Prevent hidden lazy queries during response serialization.
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  data:
+    web:
+      pageable:
+        serialization-mode: via-dto
+        max-page-size: 100
+
+app:
+  jwt:
+    secret: ${JWT_SECRET}
+    access-token-ttl: 15m
+    refresh-token-ttl: 7d
+  admin:
+    email: ${ADMIN_EMAIL:}
+    password: ${ADMIN_PASSWORD:}
