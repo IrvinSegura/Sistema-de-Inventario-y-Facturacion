@@ -13,14 +13,9 @@ import java.util.concurrent.Callable;
 import com.irvin.inventory.AbstractIntegrationTest;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.ResultActions;
 
 class SaleControllerIT extends AbstractIntegrationTest {
-
-    @Autowired
-    private JdbcTemplate jdbcTemplate;
 
     @Test
     void saleSnapshotsPricesComputesTaxPerLineAndDecrementsStock() throws Exception {
@@ -425,10 +420,9 @@ class SaleControllerIT extends AbstractIntegrationTest {
 
     @Test
     void inactiveProductCannotBeSold() throws Exception {
-        String adminToken = adminAccessToken();
         Long product = createPricedProduct("1", "0");
         addStock(product, 1);
-        deactivate(product, adminToken);
+        deactivateProduct(product);
 
         sell(saleBody(product, 1), sellerToken())
                 .andExpect(status().isBadRequest())
@@ -481,7 +475,7 @@ class SaleControllerIT extends AbstractIntegrationTest {
         Long product = createPricedProduct("1", "0");
         addStock(product, 2);
         Long saleId = readId(sell(saleBody(product, 2), adminToken).andExpect(status().isCreated()));
-        deactivate(product, adminToken);
+        deactivateProduct(product);
 
         postJson("/api/v1/sales/" + saleId + "/cancellation", cancelBody("Wrong item"), adminToken)
                 .andExpect(status().isOk());
@@ -535,19 +529,6 @@ class SaleControllerIT extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.content[0].id").value(own));
         getJson("/api/v1/sales?sellerId=" + seller.id() + "&from=2100-01-01T00:00:00Z", adminToken)
                 .andExpect(jsonPath("$.content.length()").value(0));
-    }
-
-    private void deactivate(Long productId, String adminToken) throws Exception {
-        String sku = jdbcTemplate.queryForObject("SELECT sku FROM product WHERE id = ?", String.class, productId);
-        Long version = jdbcTemplate.queryForObject("SELECT version FROM product WHERE id = ?", Long.class, productId);
-        putJson("/api/v1/products/" + productId, """
-                {"sku": "%s", "name": "Old", "categoryId": %d, "salePrice": 1, "taxRate": 0,
-                 "minStock": 0, "active": false, "version": %d}
-                """.formatted(sku, categoryId("Pantry"), version), adminToken).andExpect(status().isOk());
-    }
-
-    private int stock(Long productId) {
-        return jdbcTemplate.queryForObject("SELECT stock FROM product WHERE id = ?", Integer.class, productId);
     }
 
     // [quantity, resulting_stock] of the movement.

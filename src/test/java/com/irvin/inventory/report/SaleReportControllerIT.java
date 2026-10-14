@@ -17,13 +17,9 @@ import com.irvin.inventory.config.StoreProperties;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.jdbc.core.JdbcTemplate;
 
 // The database is shared with other tests, so every assertion is scoped to a fresh seller.
 class SaleReportControllerIT extends AbstractIntegrationTest {
-
-    @Autowired
-    private JdbcTemplate jdbcTemplate;
 
     @Autowired
     private StoreProperties storeProperties;

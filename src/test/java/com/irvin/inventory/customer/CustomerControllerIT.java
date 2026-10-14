@@ -7,13 +7,8 @@ import java.util.UUID;
 
 import com.irvin.inventory.AbstractIntegrationTest;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.jdbc.core.JdbcTemplate;
 
 class CustomerControllerIT extends AbstractIntegrationTest {
-
-    @Autowired
-    private JdbcTemplate jdbcTemplate;
 
     @Test
     void sellerCreatesCustomerWithNormalizedFields() throws Exception {

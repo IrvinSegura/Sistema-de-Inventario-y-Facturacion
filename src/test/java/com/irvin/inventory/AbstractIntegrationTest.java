@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -22,6 +23,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
@@ -42,6 +44,28 @@ public abstract class AbstractIntegrationTest {
 
     @Autowired
     protected MockMvc mockMvc;
+
+    // Direct SQL for assertions and for state the API can't set (e.g. past dates).
+    @Autowired
+    protected JdbcTemplate jdbcTemplate;
+
+    protected int stock(Long productId) {
+        return jdbcTemplate.queryForObject("SELECT stock FROM product WHERE id = ?", Integer.class, productId);
+    }
+
+    // Resends the product's current data with active=false, so tests don't depend on how it was created.
+    protected void deactivateProduct(Long productId) throws Exception {
+        Map<String, Object> product = jdbcTemplate.queryForMap("""
+                SELECT sku, name, category_id, sale_price, tax_rate, min_stock, version FROM product WHERE id = ?""",
+                productId);
+        putJson("/api/v1/products/" + productId, """
+                {"sku": "%s", "name": "%s", "categoryId": %s, "salePrice": %s, "taxRate": %s,
+                 "minStock": %s, "active": false, "version": %s}
+                """.formatted(product.get("sku"), product.get("name"), product.get("category_id"),
+                        product.get("sale_price"), product.get("tax_rate"), product.get("min_stock"),
+                        product.get("version")), adminAccessToken())
+                .andExpect(status().isOk());
+    }
 
     protected ResultActions getJson(String url, String accessToken) throws Exception {
         return mockMvc.perform(withToken(get(url), accessToken));

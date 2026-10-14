@@ -2,6 +2,8 @@ package com.irvin.inventory.stock;
 
 import java.util.List;
 import java.util.OptionalInt;
+import java.util.OptionalLong;
+import java.util.UUID;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -62,5 +64,24 @@ public class InventoryMovementRepository {
         if (inserted != 1) {
             throw new IllegalStateException("Stock was not returned for product " + productId);
         }
+    }
+
+    // Signed correction; returns the movement id, or empty if the product is missing or stock would go
+    // negative. No "active" filter: discontinued products still get their remaining units written off.
+    @Transactional(propagation = Propagation.MANDATORY)
+    public OptionalLong recordAdjustment(Long productId, int quantity, String reason, UUID idempotencyKey,
+            Long userId) {
+        List<Long> id = jdbcTemplate.queryForList("""
+                WITH updated AS (
+                    UPDATE product SET stock = stock + ? WHERE id = ? AND stock + ? >= 0 RETURNING id, stock
+                )
+                INSERT INTO inventory_movement
+                    (product_id, type, quantity, resulting_stock, reason, idempotency_key, user_id)
+                SELECT id, ?, ?, stock, ?, ?, ? FROM updated
+                RETURNING id
+                """, Long.class,
+                quantity, productId, quantity, MovementType.ADJUSTMENT.name(), quantity, reason, idempotencyKey,
+                userId);
+        return id.isEmpty() ? OptionalLong.empty() : OptionalLong.of(id.getFirst());
     }
 }

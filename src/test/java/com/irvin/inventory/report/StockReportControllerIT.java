@@ -8,13 +8,8 @@ import java.util.UUID;
 
 import com.irvin.inventory.AbstractIntegrationTest;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.jdbc.core.JdbcTemplate;
 
 class StockReportControllerIT extends AbstractIntegrationTest {
-
-    @Autowired
-    private JdbcTemplate jdbcTemplate;
 
     @Test
     void listsActiveProductsAtOrBelowTheMinimumMostUrgentFirst() throws Exception {
@@ -29,7 +24,7 @@ class StockReportControllerIT extends AbstractIntegrationTest {
         addStock(atMinimum, 5);
         addStock(farBelow, 2);
         addStock(aboveMinimum, 4);
-        deactivate(inactive, categoryId);
+        deactivateProduct(inactive);
         String url = "/api/v1/stock-reports/low-stock?categoryId=" + categoryId;
 
         // Any user can read it; the client sort is ignored.
@@ -63,13 +58,5 @@ class StockReportControllerIT extends AbstractIntegrationTest {
     @Test
     void anonymousRequestsAreRejected() throws Exception {
         mockMvc.perform(get("/api/v1/stock-reports/low-stock")).andExpect(status().isUnauthorized());
-    }
-
-    private void deactivate(Long productId, Long categoryId) throws Exception {
-        String sku = jdbcTemplate.queryForObject("SELECT sku FROM product WHERE id = ?", String.class, productId);
-        putJson("/api/v1/products/" + productId, """
-                {"sku": "%s", "name": "Inactive", "categoryId": %d, "salePrice": 10, "taxRate": 0,
-                 "minStock": 10, "active": false, "version": 0}
-                """.formatted(sku, categoryId), adminAccessToken()).andExpect(status().isOk());
     }
 }

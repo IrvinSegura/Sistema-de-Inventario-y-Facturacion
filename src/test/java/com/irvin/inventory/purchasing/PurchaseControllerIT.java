@@ -14,14 +14,9 @@ import java.util.stream.IntStream;
 
 import com.irvin.inventory.AbstractIntegrationTest;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
-import org.springframework.jdbc.core.JdbcTemplate;
 
 class PurchaseControllerIT extends AbstractIntegrationTest {
-
-    @Autowired
-    private JdbcTemplate jdbcTemplate;
 
     @Test
     void purchaseIncreasesStockComputesTotalsAndRecordsMovements() throws Exception {
@@ -230,11 +225,7 @@ class PurchaseControllerIT extends AbstractIntegrationTest {
         String token = adminAccessToken();
         Long supplierId = createSupplier();
         Long product = createProduct(categoryId("Pantry"), 0);
-        String sku = jdbcTemplate.queryForObject("SELECT sku FROM product WHERE id = ?", String.class, product);
-        putJson("/api/v1/products/" + product, """
-                {"sku": "%s", "name": "Old", "categoryId": %d, "salePrice": 1, "taxRate": 0,
-                 "minStock": 0, "active": false, "version": 0}
-                """.formatted(sku, categoryId("Pantry")), token).andExpect(status().isOk());
+        deactivateProduct(product);
 
         postJson("/api/v1/purchases", purchaseBody(supplierId, product, 1, "1"), token)
                 .andExpect(status().isBadRequest())
