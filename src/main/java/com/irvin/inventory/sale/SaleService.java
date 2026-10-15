@@ -35,8 +35,8 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-// Lock order: idempotency key -> customer (FOR SHARE) -> product rows by id.
-// Cancellation: sale row -> product rows by id.
+// Lock order: idempotency key -> seller's cash drawer (FOR SHARE) -> customer (FOR SHARE) -> product rows by id.
+// Cancellation: seller's cash drawer (FOR SHARE) -> sale row -> product rows by id.
 @Service
 @RequiredArgsConstructor
 public class SaleService {
@@ -56,6 +56,7 @@ public class SaleService {
     private final UserRepository userRepository;
     private final InventoryMovementRepository inventoryMovementRepository;
     private final IdempotencyLock idempotencyLock;
+    private final CashDrawerService cashDrawerService;
     private final Clock clock;
 
     public record CreateResult(SaleResponse sale, boolean created) {
@@ -75,6 +76,10 @@ public class SaleService {
             return new CreateResult(SaleResponse.from(existing.get()), false);
         }
 
+        // PostgreSQL stores microseconds; truncating keeps this response equal to later reads.
+        Instant saleDate = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        // After the replay check: retrying a recorded sale still works once the drawer is closed.
+        cashDrawerService.requireOpenForSale(userId, saleDate);
         Customer customer = lockActiveCustomer(request.customerId());
         // Product id order: concurrent sales and purchases lock product rows in the same order.
         List<CreateSaleRequest.Item> items = request.items().stream()
@@ -85,8 +90,7 @@ public class SaleService {
         Sale sale = new Sale();
         sale.setCustomer(customer);
         sale.setUser(userRepository.getReferenceById(userId));
-        // PostgreSQL stores microseconds; truncating keeps this response equal to later reads.
-        sale.setSaleDate(clock.instant().truncatedTo(ChronoUnit.MICROS));
+        sale.setSaleDate(saleDate);
         sale.setPaymentMethod(request.paymentMethod());
         sale.setIdempotencyKey(idempotencyKey);
         BigDecimal subtotal = BigDecimal.ZERO.setScale(MONEY_SCALE);
@@ -116,14 +120,16 @@ public class SaleService {
         return new CreateResult(SaleResponse.from(sale), true);
     }
 
-    // The status change comes first: a concurrent cancellation updates no rows and never touches stock.
+    // The seller's drawer comes first and cancelled_at is stamped after it, so a closing in progress
+    // either counts this cancellation or ends before it. Then the status change: a concurrent
+    // cancellation updates no rows and never touches stock.
     @Transactional(timeout = TRANSACTION_TIMEOUT_SECONDS)
     public SaleResponse cancel(Long id, CancelSaleRequest request, Long userId) {
+        // The seller never changes, so reading it without a lock is safe.
+        Long sellerId = saleRepository.findSellerIdById(id).orElseThrow(SaleService::notFound);
+        cashDrawerService.lockForCancellation(sellerId, clock.instant());
         Instant cancelledAt = clock.instant().truncatedTo(ChronoUnit.MICROS);
         if (saleRepository.cancel(id, cancelledAt, userId, request.reason()) == 0) {
-            if (!saleRepository.existsById(id)) {
-                throw notFound();
-            }
             throw new ConflictException("Sale is already cancelled");
         }
         Sale sale = saleRepository.findDetailedById(id).orElseThrow(SaleService::notFound);

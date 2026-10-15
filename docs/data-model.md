@@ -11,6 +11,8 @@ erDiagram
     app_user ||--o{ purchase : records
     app_user ||--o{ inventory_movement : performs
     app_user ||--o{ refresh_token : owns
+    app_user ||--o{ cash_drawer : opens
+    app_user |o--o{ cash_drawer : closes
     category ||--o{ product : groups
     supplier ||--o{ purchase : supplies
     purchase ||--|{ purchase_item : contains
@@ -157,6 +159,19 @@ erDiagram
         bigint user_id FK
         timestamptz movement_date "clock_timestamp()"
     }
+
+    cash_drawer {
+        bigint id PK
+        bigint user_id FK "UK with business_date"
+        date business_date "local day (store time zone)"
+        numeric opening_float ">= 0"
+        timestamptz opened_at
+        timestamptz closed_at "set when closed"
+        bigint closed_by FK "set when closed"
+        numeric expected_cash "snapshot at closing"
+        numeric counted_cash "set when closed"
+        varchar closing_note "optional"
+    }
 ```
 
 ## Design Decisions
@@ -193,7 +208,10 @@ erDiagram
 | Sales reports aggregate in SQL inside one `REPEATABLE READ` read-only transaction with a 10 s timeout; the period is validated before it starts | Totals and breakdowns come from the same snapshot, so they agree even while sales are being recorded; no sale rows are loaded into memory. A heavy or invalid report never holds a pool connection the checkout needs. |
 | Report days follow `app.store.time-zone` (a region ID such as `America/Mexico_City`; offsets are rejected); periods are inclusive calendar days, up to 366, between 2000-01-01 and 9999-12-30 | Dates are stored in UTC, but "sales on Oct 1" means the store's local day. PostgreSQL converts both the period bounds and each sale's day (`AT TIME ZONE`), so filter and daily breakdown always agree; it reads offsets like `-06:00` with an inverted sign. |
 | Sales by period count only `COMPLETED` sales; cancelled ones are reported separately, on the day of the sale | Cancelled sales returned their stock and money, but the count is still useful for audits. A cancellation can change an already closed day, so the cash closing uses its own rule (below). |
-| Cash closing (`GET /api/v1/sale-reports/cash-closing`): sales count on the day they were rung up (even if cancelled later), cancellations on the day they were made (`cancelled_at`, partial index V9); net per payment method (can be negative), `expectedCash` = net cash | Matches the money that actually moved through the drawer. A seller's drawer is their own sales and the cancellations of those sales, whoever cancelled them. |
+| Cash closing (`GET /api/v1/sale-reports/cash-closing`): sales count on the day they were rung up (even if cancelled later), cancellations on the day they were made (`cancelled_at`, partial index V9); net per payment method (can be negative), `expectedCash` = the day's opening floats + net cash, plus the day's drawers | Matches the money that actually moved through the drawer. A seller's drawer is their own sales and the cancellations of those sales, whoever cancelled them. |
+| Cash drawer (V10): one per user and local day, opened with an `opening_float`; a sale needs its seller's drawer for the sale's day to be open (409 otherwise). At most one open drawer per user (partial unique index), so a drawer left open yesterday is closed before today's opens | One physical drawer per seller and shift. Closing it ends selling for the day, so the count is final. Sales record without a drawer FK: the user and local day identify it. |
+| Sales lock the seller's drawer `FOR SHARE` right after the idempotency key, and cancellations before stamping `cancelled_at` (drawer → sale row → products); closing locks it `FOR UPDATE`, then computes `expected_cash` = opening float + net cash of the day (same rule as the cash closing) and stores it with `counted_cash` | Sales and cancellations don't block each other, but closing waits for them: every sale is either in the expected cash or rejected, and every cancellation is either counted or stamped after the closing. The difference (counted - expected) is a snapshot: a cancellation after the closing is allowed (the refund doesn't come from the closed drawer) and only shows in the cash closing's live `expectedCash`. Closing first checks the owner without a lock, so probing other users' ids never blocks their sales. |
+| Blind count: a seller's cash closing for a day returns 409 while their drawer for that day is open; ADMIN always sees it | A seller who knew the expected cash could declare exactly that and pocket any surplus. Hiding only the cash figures isn't enough: they follow from the total and the other payment methods. Sellers can still add up their own sales in `GET /sales`; this is a deterrent, not a guarantee. |
 | Cash closing `closed` turns true 60 s (twice the transaction timeout) after the day ends; sale and cancellation transactions time out after 30 s | Dates are stamped inside the transaction but become visible at commit, so a sale stamped 23:59:59 can appear a few seconds after midnight. Bounding the transactions bounds that gap; once closed, the figures no longer change. |
 | Lock waits (`lock_timeout`), transaction timeouts and report timeouts return 503 with `Retry-After: 1` | Everything was rolled back, so a retry is safe; a retried sale repeats its `Idempotency-Key` and can't be recorded twice. |
 | Low-stock report: out-of-stock products first, then furthest below `min_stock` | A product with 0 units can't be sold at all, even if its shortage is smaller. |
@@ -204,12 +222,13 @@ erDiagram
 
 ## Indexes
 
-Details live in the migrations (`V1__initial-schema.sql`, V4, V9). Criteria:
+Details live in the migrations (`V1__initial-schema.sql`, V4, V9, V10). Criteria:
 
 - Every queried FK is indexed. The `UNIQUE (document_id, product_id)` constraints on line items also cover the document FK.
 - Trigram (GIN, `pg_trgm`) indexes on `lower(name)` and `lower(sku)` for product substring search (V4).
 - Date indexes for reports: `sale(sale_date)`, `purchase(purchase_date)`, `sale(user_id, sale_date)` and `inventory_movement(product_id, movement_date)`.
 - `sale(cancelled_at) WHERE cancelled_at IS NOT NULL` (V9) for the cash closing; partial because cancellations are rare.
+- `cash_drawer (user_id, business_date)` unique, used by every sale to find its drawer; `cash_drawer(user_id) WHERE closed_at IS NULL` unique (one open drawer per user); `cash_drawer(business_date)` for the store-wide cash closing (V10).
 - `stock` is not indexed: it's the hottest column and the low-stock report scans a small catalog.
 
 ## Role Permissions
@@ -222,11 +241,12 @@ Details live in the migrations (`V1__initial-schema.sql`, V4, V9). Criteria:
 | Record purchases | ✅ | ❌ |
 | Create customers and edit their contact data | ✅ | ✅ |
 | Change a customer's tax ID or deactivate it | ✅ | ❌ |
-| Record sales | ✅ | ✅ |
+| Record sales (needs an open cash drawer) | ✅ | ✅ |
+| Open and close a cash drawer | ✅ Any | Own only |
 | View sales | ✅ | Own sales only |
 | Cancel sales | ✅ | ❌ |
 | Manual stock adjustments | ✅ | ❌ |
 | View the stock ledger | ✅ | ❌ |
 | Sales reports | ✅ | Own sales only |
-| Cash closing | ✅ | Own drawer only |
+| Cash closing | ✅ | Own drawer only, once it's closed |
 | Low-stock report | ✅ | ✅ |

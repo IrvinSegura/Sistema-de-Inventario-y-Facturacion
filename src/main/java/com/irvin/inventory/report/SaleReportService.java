@@ -14,6 +14,7 @@ import java.util.Map;
 
 import com.irvin.inventory.common.DateBounds;
 import com.irvin.inventory.common.exception.BadRequestException;
+import com.irvin.inventory.common.exception.ConflictException;
 import com.irvin.inventory.config.StoreProperties;
 import com.irvin.inventory.report.SaleReportRepository.PaymentMethodAmount;
 import com.irvin.inventory.report.dto.CashClosingResponse;
@@ -21,7 +22,9 @@ import com.irvin.inventory.report.dto.CashClosingResponse.Amounts;
 import com.irvin.inventory.report.dto.SaleReportResponse;
 import com.irvin.inventory.report.dto.SaleReportResponse.DailyTotal;
 import com.irvin.inventory.report.dto.SaleReportResponse.Totals;
+import com.irvin.inventory.sale.CashDrawerRepository;
 import com.irvin.inventory.sale.PaymentMethod;
+import com.irvin.inventory.sale.dto.CashDrawerResponse;
 import com.irvin.inventory.sale.SaleService;
 import com.irvin.inventory.sale.SaleStatus;
 import com.irvin.inventory.security.CurrentUser;
@@ -45,13 +48,15 @@ public class SaleReportService {
     private static final Totals NO_SALES = new Totals(0, ZERO, ZERO, ZERO);
 
     private final SaleReportRepository saleReportRepository;
+    private final CashDrawerRepository cashDrawerRepository;
     private final StoreProperties storeProperties;
     private final Clock clock;
     private final TransactionTemplate snapshotTransaction;
 
-    public SaleReportService(SaleReportRepository saleReportRepository, StoreProperties storeProperties,
-            Clock clock, PlatformTransactionManager transactionManager) {
+    public SaleReportService(SaleReportRepository saleReportRepository, CashDrawerRepository cashDrawerRepository,
+            StoreProperties storeProperties, Clock clock, PlatformTransactionManager transactionManager) {
         this.saleReportRepository = saleReportRepository;
+        this.cashDrawerRepository = cashDrawerRepository;
         this.storeProperties = storeProperties;
         this.clock = clock;
         // One snapshot for every query, so totals and breakdowns agree even while sales come in.
@@ -87,7 +92,7 @@ public class SaleReportService {
                 new SaleReportRepository.Period(day, day.plusDays(1), zone, scopedSellerId(sellerId, viewer));
         Instant closesAt = day.plusDays(1).atStartOfDay(zone).toInstant().plus(CLOSING_MARGIN);
         boolean closed = !clock.instant().isBefore(closesAt);
-        return snapshotTransaction.execute(status -> buildCashClosing(day, zone, closed, period));
+        return snapshotTransaction.execute(status -> buildCashClosing(day, zone, closed, period, viewer));
     }
 
     // Sellers only get their own sales (and, in the cash closing, the cancellations of those sales,
@@ -123,7 +128,17 @@ public class SaleReportService {
     }
 
     private CashClosingResponse buildCashClosing(LocalDate day, ZoneId zone, boolean closed,
-            SaleReportRepository.Period period) {
+            SaleReportRepository.Period period, CurrentUser viewer) {
+        // Same snapshot: JPA reads run in the template's transaction.
+        List<CashDrawerResponse> drawers = (period.sellerId() == null
+                ? cashDrawerRepository.findByBusinessDateOrderByUserId(day)
+                : cashDrawerRepository.findByBusinessDateAndUserId(day, period.sellerId()))
+                .stream().map(CashDrawerResponse::from).toList();
+        // Blind count: a seller who knew the expected cash could declare exactly that and pocket any
+        // surplus. Hiding only the cash figures isn't enough, since they follow from the other ones.
+        if (!viewer.isAdmin() && drawers.stream().anyMatch(drawer -> drawer.closing() == null)) {
+            throw new ConflictException("Close your cash drawer before viewing its cash closing");
+        }
         Map<PaymentMethod, PaymentMethodAmount> sales =
                 indexByPaymentMethod(saleReportRepository.salesByPaymentMethod(period));
         Map<PaymentMethod, PaymentMethodAmount> cancellations =
@@ -134,8 +149,9 @@ public class SaleReportService {
             byPaymentMethod.put(method, toAmounts(sales.get(method), cancellations.get(method)));
         }
         Amounts total = byPaymentMethod.values().stream().reduce(Amounts.NONE, Amounts::plus);
+        BigDecimal openingFloat = drawers.stream().map(CashDrawerResponse::openingFloat).reduce(ZERO, BigDecimal::add);
         return new CashClosingResponse(day, zone.getId(), period.sellerId(), closed, byPaymentMethod, total,
-                byPaymentMethod.get(PaymentMethod.CASH).net());
+                openingFloat, openingFloat.add(byPaymentMethod.get(PaymentMethod.CASH).net()), drawers);
     }
 
     // A missing amount means no movements with that payment method.

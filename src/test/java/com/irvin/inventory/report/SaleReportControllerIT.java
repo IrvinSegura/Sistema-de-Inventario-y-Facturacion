@@ -28,7 +28,7 @@ class SaleReportControllerIT extends AbstractIntegrationTest {
     @Test
     void reportAggregatesCompletedSalesAndCountsCancelledSeparately() throws Exception {
         CreatedUser seller = createSeller();
-        String sellerToken = loginOk(seller.email(), DEFAULT_PASSWORD).accessToken();
+        String sellerToken = sellerToken(seller);
         Long soda = createPricedProduct("10.03", "0.16");
         Long rice = createPricedProduct("25.5", "0");
         addStock(soda, 10);
@@ -75,7 +75,7 @@ class SaleReportControllerIT extends AbstractIntegrationTest {
     void adminFiltersBySellerOrSeesEverySeller() throws Exception {
         String adminToken = adminAccessToken();
         CreatedUser seller = createSeller();
-        String sellerToken = loginOk(seller.email(), DEFAULT_PASSWORD).accessToken();
+        String sellerToken = sellerToken(seller);
         Long product = createPricedProduct("7.5", "0");
         addStock(product, 2);
         sell(oneLineBody("TRANSFER", product, 2), sellerToken).andExpect(status().isCreated());
@@ -94,8 +94,8 @@ class SaleReportControllerIT extends AbstractIntegrationTest {
     void sellerNeverSeesAnotherSellersSales() throws Exception {
         CreatedUser sellerA = createSeller();
         CreatedUser sellerB = createSeller();
-        String tokenA = loginOk(sellerA.email(), DEFAULT_PASSWORD).accessToken();
-        String tokenB = loginOk(sellerB.email(), DEFAULT_PASSWORD).accessToken();
+        String tokenA = sellerToken(sellerA);
+        String tokenB = sellerToken(sellerB);
         Long onlyA = createPricedProduct("3", "0");
         Long onlyB = createPricedProduct("4", "0");
         addStock(onlyA, 1);
@@ -154,7 +154,7 @@ class SaleReportControllerIT extends AbstractIntegrationTest {
     @Test
     void daysFollowTheStoreTimeZone() throws Exception {
         CreatedUser seller = createSeller();
-        String sellerToken = loginOk(seller.email(), DEFAULT_PASSWORD).accessToken();
+        String sellerToken = sellerToken(seller);
         Long product = createPricedProduct("10", "0");
         addStock(product, 2);
         // Midnight in Mexico City (UTC-6) is 06:00Z: the first sale is the last microsecond of Dec 30.
@@ -199,8 +199,8 @@ class SaleReportControllerIT extends AbstractIntegrationTest {
         String storeBefore = getJson(closingUrl, adminToken).andReturn().getResponse().getContentAsString();
         CreatedUser sellerA = createSeller();
         CreatedUser sellerB = createSeller();
-        String tokenA = loginOk(sellerA.email(), DEFAULT_PASSWORD).accessToken();
-        String tokenB = loginOk(sellerB.email(), DEFAULT_PASSWORD).accessToken();
+        String tokenA = sellerToken(sellerA);
+        String tokenB = sellerToken(sellerB);
         Long product = createPricedProduct("1", "0");
         addStock(product, 100);
         // Nov 10, 2025 in Mexico City (UTC-6) runs from 06:00Z to 06:00Z next day. Every cancellation
@@ -262,7 +262,7 @@ class SaleReportControllerIT extends AbstractIntegrationTest {
     @Test
     void cashClosingCancellationsFollowTheStoreTimeZone() throws Exception {
         CreatedUser seller = createSeller();
-        String token = loginOk(seller.email(), DEFAULT_PASSWORD).accessToken();
+        String token = sellerToken(seller);
         Long product = createPricedProduct("1", "0");
         addStock(product, 2);
         // Last microsecond of Nov 10 in Mexico City, and the first one of Nov 11.
@@ -279,7 +279,8 @@ class SaleReportControllerIT extends AbstractIntegrationTest {
 
     @Test
     void cashClosingDefaultsToTodayAndRejectsInvalidDates() throws Exception {
-        String token = sellerToken();
+        // Without a drawer today, so the blind count doesn't apply.
+        String token = loginOk(createSeller().email(), DEFAULT_PASSWORD).accessToken();
 
         getJson("/api/v1/sale-reports/cash-closing", token)
                 .andExpect(status().isOk())

@@ -76,6 +76,7 @@ public class SaleReportRepository {
 
     // Cash closing: every sale rung up in the period, whatever its current status, since the money
     // entered the drawer then. Payment methods without sales are missing.
+    // Keep in sync with SaleRepository.netCash, which closes a drawer with the same rule.
     public List<PaymentMethodAmount> salesByPaymentMethod(Period period) {
         return amountsByPaymentMethod(period.where(DateColumn.SALE_DATE), period);
     }
