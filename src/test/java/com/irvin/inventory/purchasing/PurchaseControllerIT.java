@@ -1,6 +1,7 @@
 package com.irvin.inventory.purchasing;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -254,6 +255,23 @@ class PurchaseControllerIT extends AbstractIntegrationTest {
         getJson("/api/v1/purchases?supplierId=" + supplierId + "&from=2100-01-01T00:00:00Z", token)
                 .andExpect(jsonPath("$.content.length()").value(0));
         getJson("/api/v1/purchases/999999", token).andExpect(status().isNotFound());
+    }
+
+    @Test
+    void invalidDateRangesAreRejected() throws Exception {
+        String token = adminAccessToken();
+
+        getJson("/api/v1/purchases?from=2025-02-01T00:00:00Z&to=2025-01-01T00:00:00Z", token)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("'from' must be before 'to'"));
+        getJson("/api/v1/purchases?from=2025-01-01T00:00:00Z&to=2025-01-01T00:00:00Z", token)
+                .andExpect(status().isBadRequest());
+        // ISO instants accept signed years beyond 9999; queryParam avoids URL-encoding the "+".
+        mockMvc.perform(withToken(get("/api/v1/purchases").queryParam("to", "+999999999-12-31T00:00:00Z"), token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value(
+                        "Dates must be between 2000-01-01T00:00:00Z and 9999-12-30T00:00:00Z"));
+        getJson("/api/v1/purchases?from=1999-12-31T00:00:00Z", token).andExpect(status().isBadRequest());
     }
 
     @Test
