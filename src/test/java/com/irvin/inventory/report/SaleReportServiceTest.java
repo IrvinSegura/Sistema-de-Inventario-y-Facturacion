@@ -9,16 +9,23 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 
 import com.irvin.inventory.common.exception.BadRequestException;
 import com.irvin.inventory.config.StoreProperties;
+import com.irvin.inventory.report.SaleReportRepository.PaymentMethodAmount;
+import com.irvin.inventory.report.dto.CashClosingResponse;
+import com.irvin.inventory.report.dto.CashClosingResponse.Amounts;
 import com.irvin.inventory.report.dto.SaleReportResponse;
 import com.irvin.inventory.report.dto.SaleReportResponse.DailyTotal;
 import com.irvin.inventory.report.dto.SaleReportResponse.Totals;
+import com.irvin.inventory.sale.PaymentMethod;
 import com.irvin.inventory.sale.SaleStatus;
 import com.irvin.inventory.security.CurrentUser;
 import com.irvin.inventory.user.Role;
@@ -32,11 +39,13 @@ class SaleReportServiceTest {
     private static final CurrentUser ADMIN = new CurrentUser(1L, Role.ADMIN);
     private static final CurrentUser SELLER = new CurrentUser(7L, Role.SELLER);
     private static final LocalDate DAY = LocalDate.of(2026, 3, 10);
+    // 03:00 UTC on Mar 11 is still Mar 10 in Mexico City (UTC-6).
+    private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-03-11T03:00:00Z"), ZoneOffset.UTC);
 
     private final SaleReportRepository repository = mock(SaleReportRepository.class);
     private final PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
     private final SaleReportService service =
-            new SaleReportService(repository, new StoreProperties(ZONE), transactionManager);
+            new SaleReportService(repository, new StoreProperties(ZONE), CLOCK, transactionManager);
 
     @Test
     void sellerIsAlwaysScopedToTheirOwnSales() {
@@ -108,6 +117,62 @@ class SaleReportServiceTest {
         service.salesReport(LocalDate.of(2024, 1, 1), LocalDate.of(2024, 12, 31), null, ADMIN);
 
         verify(repository).totalsByStatus(any());
+    }
+
+    @Test
+    void cashClosingDefaultsToTodayAndScopesBothQueriesToTheSeller() {
+        service.cashClosing(null, 99L, SELLER);
+
+        ArgumentCaptor<SaleReportRepository.Period> sales = ArgumentCaptor.forClass(SaleReportRepository.Period.class);
+        ArgumentCaptor<SaleReportRepository.Period> cancellations =
+                ArgumentCaptor.forClass(SaleReportRepository.Period.class);
+        verify(repository).salesByPaymentMethod(sales.capture());
+        verify(repository).cancellationsByPaymentMethod(cancellations.capture());
+        assertThat(sales.getValue().from()).isEqualTo(DAY);
+        assertThat(sales.getValue().toExclusive()).isEqualTo(DAY.plusDays(1));
+        assertThat(sales.getValue().sellerId()).isEqualTo(SELLER.id());
+        assertThat(cancellations.getValue()).isEqualTo(sales.getValue());
+    }
+
+    @Test
+    void cashClosingNetsCancellationsPerPaymentMethod() {
+        when(repository.salesByPaymentMethod(any())).thenReturn(List.of(
+                new PaymentMethodAmount(PaymentMethod.CARD, 1, new BigDecimal("20.00")),
+                new PaymentMethodAmount(PaymentMethod.CASH, 3, new BigDecimal("30.00"))));
+        when(repository.cancellationsByPaymentMethod(any())).thenReturn(List.of(
+                new PaymentMethodAmount(PaymentMethod.CASH, 2, new BigDecimal("12.50"))));
+
+        CashClosingResponse closing = service.cashClosing(DAY, null, ADMIN);
+
+        assertThat(closing.byPaymentMethod().keySet())
+                .containsExactly(PaymentMethod.CASH, PaymentMethod.CARD, PaymentMethod.TRANSFER);
+        assertThat(closing.byPaymentMethod().get(PaymentMethod.CASH).net()).isEqualTo(new BigDecimal("17.50"));
+        assertThat(closing.byPaymentMethod().get(PaymentMethod.TRANSFER)).isEqualTo(Amounts.NONE);
+        assertThat(closing.expectedCash()).isEqualTo(new BigDecimal("17.50"));
+        assertThat(closing.total()).isEqualTo(new Amounts(4, new BigDecimal("50.00"), 2,
+                new BigDecimal("12.50"), new BigDecimal("37.50")));
+    }
+
+    @Test
+    void cashClosingIsClosedOnlyAfterTheDayEndsPlusTheMargin() {
+        // Mar 10 ends at 2026-03-11T06:00Z in Mexico City; the margin is 60 s.
+        assertThat(serviceAt("2026-03-11T06:00:59Z").cashClosing(DAY, null, ADMIN).closed()).isFalse();
+        assertThat(serviceAt("2026-03-11T06:01:00Z").cashClosing(DAY, null, ADMIN).closed()).isTrue();
+        // The default clock is still on Mar 10.
+        assertThat(service.cashClosing(DAY, null, ADMIN).closed()).isFalse();
+        assertThat(service.cashClosing(DAY.minusDays(1), null, ADMIN).closed()).isTrue();
+    }
+
+    @Test
+    void cashClosingRejectsDatesOutOfBounds() {
+        assertThatThrownBy(() -> service.cashClosing(LocalDate.of(1999, 12, 31), null, ADMIN))
+                .isInstanceOf(BadRequestException.class);
+        verifyNoInteractions(repository, transactionManager);
+    }
+
+    private SaleReportService serviceAt(String instant) {
+        return new SaleReportService(repository, new StoreProperties(ZONE),
+                Clock.fixed(Instant.parse(instant), ZoneOffset.UTC), transactionManager);
     }
 
     @Test

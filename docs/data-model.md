@@ -192,7 +192,10 @@ erDiagram
 | `product.stock` is `INTEGER` | Overflow needs over 2.1 billion units of one product; accepted, it would surface as a generic 409. |
 | Sales reports aggregate in SQL inside one `REPEATABLE READ` read-only transaction with a 10 s timeout; the period is validated before it starts | Totals and breakdowns come from the same snapshot, so they agree even while sales are being recorded; no sale rows are loaded into memory. A heavy or invalid report never holds a pool connection the checkout needs. |
 | Report days follow `app.store.time-zone` (a region ID such as `America/Mexico_City`; offsets are rejected); periods are inclusive calendar days, up to 366, between 2000-01-01 and 9999-12-30 | Dates are stored in UTC, but "sales on Oct 1" means the store's local day. PostgreSQL converts both the period bounds and each sale's day (`AT TIME ZONE`), so filter and daily breakdown always agree; it reads offsets like `-06:00` with an inverted sign. |
-| Sales by period count only `COMPLETED` sales; cancelled ones are reported separately, on the day of the sale | Cancelled sales returned their stock and money, but the count is still useful for audits. A cancellation can change an already closed day; a cash-closing report by `cancelled_at` would be a separate view. |
+| Sales by period count only `COMPLETED` sales; cancelled ones are reported separately, on the day of the sale | Cancelled sales returned their stock and money, but the count is still useful for audits. A cancellation can change an already closed day, so the cash closing uses its own rule (below). |
+| Cash closing (`GET /api/v1/sale-reports/cash-closing`): sales count on the day they were rung up (even if cancelled later), cancellations on the day they were made (`cancelled_at`, partial index V9); net per payment method (can be negative), `expectedCash` = net cash | Matches the money that actually moved through the drawer. A seller's drawer is their own sales and the cancellations of those sales, whoever cancelled them. |
+| Cash closing `closed` turns true 60 s (twice the transaction timeout) after the day ends; sale and cancellation transactions time out after 30 s | Dates are stamped inside the transaction but become visible at commit, so a sale stamped 23:59:59 can appear a few seconds after midnight. Bounding the transactions bounds that gap; once closed, the figures no longer change. |
+| Lock waits (`lock_timeout`), transaction timeouts and report timeouts return 503 with `Retry-After: 1` | Everything was rolled back, so a retry is safe; a retried sale repeats its `Idempotency-Key` and can't be recorded twice. |
 | Low-stock report: out-of-stock products first, then furthest below `min_stock` | A product with 0 units can't be sold at all, even if its shortage is smaller. |
 | Sales are cancelled, catalogs soft-deleted (`active`) | History is never broken. |
 | Seeded "PUBLICO EN GENERAL" customer (`XAXX010101000`), looked up by tax ID constant and read-only through the API | Every sale has a customer, as Mexican invoicing requires; sales without `customerId` fall back to it, so it can't be renamed or deactivated. |
@@ -201,11 +204,12 @@ erDiagram
 
 ## Indexes
 
-Details live in `V1__initial-schema.sql`. Criteria:
+Details live in the migrations (`V1__initial-schema.sql`, V4, V9). Criteria:
 
 - Every queried FK is indexed. The `UNIQUE (document_id, product_id)` constraints on line items also cover the document FK.
 - Trigram (GIN, `pg_trgm`) indexes on `lower(name)` and `lower(sku)` for product substring search (V4).
 - Date indexes for reports: `sale(sale_date)`, `purchase(purchase_date)`, `sale(user_id, sale_date)` and `inventory_movement(product_id, movement_date)`.
+- `sale(cancelled_at) WHERE cancelled_at IS NOT NULL` (V9) for the cash closing; partial because cancellations are rare.
 - `stock` is not indexed: it's the hottest column and the low-stock report scans a small catalog.
 
 ## Role Permissions
@@ -224,4 +228,5 @@ Details live in `V1__initial-schema.sql`. Criteria:
 | Manual stock adjustments | ✅ | ❌ |
 | View the stock ledger | ✅ | ❌ |
 | Sales reports | ✅ | Own sales only |
+| Cash closing | ✅ | Own drawer only |
 | Low-stock report | ✅ | ✅ |

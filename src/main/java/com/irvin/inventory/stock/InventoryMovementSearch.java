@@ -10,10 +10,7 @@ import com.irvin.inventory.common.exception.BadRequestException;
 public record InventoryMovementSearch(Long productId, MovementType type, Instant from, Instant to) {
 
     public InventoryMovementSearch {
-        if (DateBounds.isOutside(from) || DateBounds.isOutside(to)) {
-            throw new BadRequestException(
-                    "Dates must be between " + DateBounds.MIN_INSTANT + " and " + DateBounds.MAX_INSTANT);
-        }
+        DateBounds.requireWithin(from, to);
         if (from != null && to != null && !from.isBefore(to)) {
             throw new BadRequestException("'from' must be before 'to'");
         }
