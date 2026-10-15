@@ -4,12 +4,22 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.irvin.inventory.common.DateBounds;
+import com.irvin.inventory.common.exception.BadRequestException;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.jpa.domain.Specification;
 
 // Sale filters; null values are ignored. The date range is [from, to).
+// Validated on construction, so a bad range fails before any transaction or query.
 public record SaleSearch(
         Long saleNumber, Long customerId, Long sellerId, SaleStatus status, Instant from, Instant to) {
+
+    public SaleSearch {
+        DateBounds.requireWithin(from, to);
+        if (from != null && to != null && !from.isBefore(to)) {
+            throw new BadRequestException("'from' must be before 'to'");
+        }
+    }
 
     // Sellers only see their own sales, whatever seller filter they sent.
     SaleSearch withSeller(Long sellerId) {
