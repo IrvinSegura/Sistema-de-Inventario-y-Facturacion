@@ -1,0 +1,9 @@
+# Only .mvn, mvnw, pom.xml and src are copied; this keeps the build context small
+# and secrets (.env) out of it.
+*
+!.mvn/
+!mvnw
+!pom.xml
+!src/
+.mvn/wrapper/maven-wrapper.jar
+src/test/
