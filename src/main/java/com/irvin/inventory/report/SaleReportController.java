@@ -2,7 +2,9 @@ package com.irvin.inventory.report;
 
 import java.time.LocalDate;
 
+import com.irvin.inventory.report.dto.CashClosingResponse;
 import com.irvin.inventory.report.dto.SaleReportResponse;
+import com.irvin.inventory.sale.SaleService;
 import com.irvin.inventory.security.CurrentUser;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -38,5 +40,21 @@ public class SaleReportController {
             @Parameter(description = "Ignored for sellers") @RequestParam(required = false) Long sellerId,
             @AuthenticationPrincipal Jwt jwt) {
         return saleReportService.salesReport(from, to, sellerId, CurrentUser.from(jwt));
+    }
+
+    @Operation(summary = "Cash closing for one day, by payment method",
+            description = "Sales rung up that day (even if cancelled later) minus cancellations made that day "
+                    + "(even of older sales); expectedCash is the net cash for the drawer. Nets can be negative "
+                    + "when cancellations exceed sales. 'closed' turns true "
+                    + 2 * SaleService.TRANSACTION_TIMEOUT_SECONDS + " s after the day ends; until then, "
+                    + "sales still being recorded can change the figures. Sellers get their own drawer: their "
+                    + "sales and the cancellations of their sales.")
+    @GetMapping("/cash-closing")
+    public CashClosingResponse cashClosing(
+            @Parameter(description = "Day in the store's time zone; defaults to today")
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+            @Parameter(description = "Ignored for sellers") @RequestParam(required = false) Long sellerId,
+            @AuthenticationPrincipal Jwt jwt) {
+        return saleReportService.cashClosing(date, sellerId, CurrentUser.from(jwt));
     }
 }

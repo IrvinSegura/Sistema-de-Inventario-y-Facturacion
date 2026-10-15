@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -153,10 +154,12 @@ class SaleReportControllerIT extends AbstractIntegrationTest {
     @Test
     void daysFollowTheStoreTimeZone() throws Exception {
         CreatedUser seller = createSeller();
+        String sellerToken = loginOk(seller.email(), DEFAULT_PASSWORD).accessToken();
         Long product = createPricedProduct("10", "0");
+        addStock(product, 2);
         // Midnight in Mexico City (UTC-6) is 06:00Z: the first sale is the last microsecond of Dec 30.
-        insertPastSale(seller.id(), product, "2025-12-31T05:59:59.999999Z");
-        insertPastSale(seller.id(), product, "2025-12-31T06:00:00Z");
+        sellAt(sellerToken, product, "CASH", 1, at("2025-12-31T05:59:59.999999Z"));
+        sellAt(sellerToken, product, "CASH", 1, at("2025-12-31T06:00:00Z"));
         String adminToken = adminAccessToken();
         String sellerFilter = "&sellerId=" + seller.id();
 
@@ -189,6 +192,107 @@ class SaleReportControllerIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void cashClosingCountsSalesOnTheirDayAndCancellationsOnTheDayTheyWereMade() throws Exception {
+        String adminToken = adminAccessToken();
+        String closingUrl = "/api/v1/sale-reports/cash-closing?date=2025-11-10";
+        // The database is shared: the whole-store check compares against what was there before.
+        String storeBefore = getJson(closingUrl, adminToken).andReturn().getResponse().getContentAsString();
+        CreatedUser sellerA = createSeller();
+        CreatedUser sellerB = createSeller();
+        String tokenA = loginOk(sellerA.email(), DEFAULT_PASSWORD).accessToken();
+        String tokenB = loginOk(sellerB.email(), DEFAULT_PASSWORD).accessToken();
+        Long product = createPricedProduct("1", "0");
+        addStock(product, 100);
+        // Nov 10, 2025 in Mexico City (UTC-6) runs from 06:00Z to 06:00Z next day. Every cancellation
+        // is made by the admin: it still belongs to the drawer of the seller who made the sale.
+        sellAt(tokenA, product, "CASH", 10, at("2025-11-10T15:00:00Z"));
+        sellAt(tokenA, product, "CARD", 20, at("2025-11-10T16:00:00Z"));
+        // Sold and cancelled the same day: in and out of the drawer.
+        cancelAt(sellAt(tokenA, product, "CASH", 5, at("2025-11-10T17:00:00Z")), at("2025-11-10T18:00:00Z"));
+        // Older sale cancelled on Nov 10: the cancellation belongs to Nov 10.
+        cancelAt(sellAt(tokenA, product, "TRANSFER", 7, at("2025-11-09T15:00:00Z")), at("2025-11-10T19:00:00Z"));
+        // Sold on Nov 10, cancelled on Nov 11: Nov 10 keeps the sale.
+        cancelAt(sellAt(tokenA, product, "CASH", 3, at("2025-11-10T20:00:00Z")), at("2025-11-11T15:00:00Z"));
+        // B's movements, including a cancellation, never reach A's drawer.
+        sellAt(tokenB, product, "CASH", 4, at("2025-11-10T15:30:00Z"));
+        cancelAt(sellAt(tokenB, product, "CARD", 2, at("2025-11-10T16:30:00Z")), at("2025-11-10T17:30:00Z"));
+
+        // A's drawer, whether A asks (another sellerId is ignored) or an admin filters by A.
+        for (List<String> request : List.of(
+                List.of(closingUrl + "&sellerId=" + sellerB.id(), tokenA),
+                List.of(closingUrl + "&sellerId=" + sellerA.id(), adminToken))) {
+            String body = getJson(request.get(0), request.get(1))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.date").value("2025-11-10"))
+                    .andExpect(jsonPath("$.sellerId").value(sellerA.id()))
+                    .andExpect(jsonPath("$.closed").value(true))
+                    .andReturn().getResponse().getContentAsString();
+            assertThat(body).contains(
+                    "\"byPaymentMethod\":{"
+                            + "\"CASH\":{\"saleCount\":3,\"salesTotal\":18.00,"
+                            + "\"cancellationCount\":1,\"cancellationsTotal\":5.00,\"net\":13.00},"
+                            + "\"CARD\":{\"saleCount\":1,\"salesTotal\":20.00,"
+                            + "\"cancellationCount\":0,\"cancellationsTotal\":0.00,\"net\":20.00},"
+                            + "\"TRANSFER\":{\"saleCount\":0,\"salesTotal\":0.00,"
+                            + "\"cancellationCount\":1,\"cancellationsTotal\":7.00,\"net\":-7.00}}",
+                    "\"total\":{\"saleCount\":4,\"salesTotal\":38.00,"
+                            + "\"cancellationCount\":2,\"cancellationsTotal\":12.00,\"net\":26.00}",
+                    "\"expectedCash\":13.00");
+        }
+        // The next day only carries the late cancellation.
+        getJson("/api/v1/sale-reports/cash-closing?date=2025-11-11&sellerId=" + sellerA.id(), adminToken)
+                .andExpect(jsonPath("$.total.saleCount").value(0))
+                .andExpect(jsonPath("$.total.cancellationCount").value(1))
+                .andExpect(jsonPath("$.expectedCash").value(-3.0));
+        // The admin cancelled those sales, but they aren't in the admin's own drawer.
+        Long adminId = ((Number) JsonPath.read(getJson("/api/v1/users/me", adminToken)
+                .andReturn().getResponse().getContentAsString(), "$.id")).longValue();
+        getJson(closingUrl + "&sellerId=" + adminId, adminToken)
+                .andExpect(jsonPath("$.total.cancellationCount").value(0));
+        // The whole store adds both drawers: A's cash net 13 plus B's 4.
+        String storeAfter = getJson(closingUrl, adminToken)
+                .andExpect(jsonPath("$.sellerId").doesNotExist())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(number(storeAfter, "$.byPaymentMethod.CASH.saleCount")
+                .subtract(number(storeBefore, "$.byPaymentMethod.CASH.saleCount"))).isEqualByComparingTo("4");
+        assertThat(number(storeAfter, "$.expectedCash").subtract(number(storeBefore, "$.expectedCash")))
+                .isEqualByComparingTo("17.00");
+    }
+
+    @Test
+    void cashClosingCancellationsFollowTheStoreTimeZone() throws Exception {
+        CreatedUser seller = createSeller();
+        String token = loginOk(seller.email(), DEFAULT_PASSWORD).accessToken();
+        Long product = createPricedProduct("1", "0");
+        addStock(product, 2);
+        // Last microsecond of Nov 10 in Mexico City, and the first one of Nov 11.
+        cancelAt(sellAt(token, product, "CASH", 1, at("2025-11-09T15:00:00Z")), at("2025-11-11T05:59:59.999999Z"));
+        cancelAt(sellAt(token, product, "CASH", 1, at("2025-11-09T15:00:00Z")), at("2025-11-11T06:00:00Z"));
+        String adminToken = adminAccessToken();
+
+        for (String date : List.of("2025-11-10", "2025-11-11")) {
+            getJson("/api/v1/sale-reports/cash-closing?date=" + date + "&sellerId=" + seller.id(), adminToken)
+                    .andExpect(jsonPath("$.total.cancellationCount").value(1))
+                    .andExpect(jsonPath("$.expectedCash").value(-1.0));
+        }
+    }
+
+    @Test
+    void cashClosingDefaultsToTodayAndRejectsInvalidDates() throws Exception {
+        String token = sellerToken();
+
+        getJson("/api/v1/sale-reports/cash-closing", token)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.timeZone").value("America/Mexico_City"))
+                .andExpect(jsonPath("$.date").value(today().toString()))
+                .andExpect(jsonPath("$.closed").value(false));
+        getJson("/api/v1/sale-reports/cash-closing?date=1999-12-31", token)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Dates must be between 2000-01-01 and 9999-12-30"));
+        getJson("/api/v1/sale-reports/cash-closing?date=10/11/2025", token).andExpect(status().isBadRequest());
+    }
+
+    @Test
     void invalidPeriodsAreRejected() throws Exception {
         String token = sellerToken();
 
@@ -213,16 +317,30 @@ class SaleReportControllerIT extends AbstractIntegrationTest {
         getJson("/api/v1/sale-reports?from=01/01/2026&to=2026-01-31", token).andExpect(status().isBadRequest());
     }
 
-    // sale_date is set by the server, so a past date needs a direct insert. One 10.00 line, like a real sale.
-    private void insertPastSale(Long sellerId, Long productId, String saleDate) {
-        Long saleId = jdbcTemplate.queryForObject("""
-                INSERT INTO sale (customer_id, user_id, sale_date, subtotal, tax, total, payment_method, idempotency_key)
-                SELECT id, ?, CAST(? AS timestamptz), 10.00, 0.00, 10.00, 'CASH', gen_random_uuid()
-                FROM customer WHERE tax_id = 'XAXX010101000'
-                RETURNING id""", Long.class, sellerId, saleDate);
-        jdbcTemplate.update("""
-                INSERT INTO sale_item (sale_id, product_id, quantity, unit_price, tax_rate, subtotal, tax)
-                VALUES (?, ?, 1, 10.00, 0, 10.00, 0.00)""", saleId, productId);
+    // sale_date is set by the server: sell through the API, then move only that column.
+    private Long sellAt(String sellerToken, Long productId, String paymentMethod, int quantity, OffsetDateTime saleDate)
+            throws Exception {
+        Long saleId = readId(sell(oneLineBody(paymentMethod, productId, quantity), sellerToken)
+                .andExpect(status().isCreated()));
+        jdbcTemplate.update("UPDATE sale SET sale_date = ? WHERE id = ?", saleDate, saleId);
+        return saleId;
+    }
+
+    // Cancelled by the admin through the API, then only cancelled_at is moved.
+    private void cancelAt(Long saleId, OffsetDateTime cancelledAt) throws Exception {
+        postJson("/api/v1/sales/" + saleId + "/cancellation", """
+                {"reason": "Test cancellation"}
+                """, adminAccessToken()).andExpect(status().isOk());
+        jdbcTemplate.update("UPDATE sale SET cancelled_at = ? WHERE id = ?", cancelledAt, saleId);
+    }
+
+    // PgJDBC binds OffsetDateTime as timestamptz.
+    private static OffsetDateTime at(String instant) {
+        return OffsetDateTime.parse(instant);
+    }
+
+    private static BigDecimal number(String json, String path) {
+        return new BigDecimal(JsonPath.read(json, path).toString());
     }
 
     private static BigDecimal sum(String json, String path) {

@@ -46,6 +46,9 @@ public class SaleService {
     // Largest value of NUMERIC(12,2).
     private static final BigDecimal MAX_TOTAL = new BigDecimal("9999999999.99");
     private static final int MONEY_SCALE = 2;
+    // sale_date / cancelled_at are stamped inside the transaction but become visible at commit.
+    // Bounding the transaction bounds that gap, which the cash closing's "closed" margin relies on.
+    public static final int TRANSACTION_TIMEOUT_SECONDS = 30;
 
     private final SaleRepository saleRepository;
     private final CustomerRepository customerRepository;
@@ -59,7 +62,7 @@ public class SaleService {
     }
 
     // Header, items, stock decrements and inventory movements are saved in one transaction.
-    @Transactional
+    @Transactional(timeout = TRANSACTION_TIMEOUT_SECONDS)
     public CreateResult create(CreateSaleRequest request, UUID idempotencyKey, Long userId) {
         ensureNoDuplicateProducts(request);
         idempotencyLock.acquire(IDEMPOTENCY_SCOPE, idempotencyKey);
@@ -114,7 +117,7 @@ public class SaleService {
     }
 
     // The status change comes first: a concurrent cancellation updates no rows and never touches stock.
-    @Transactional
+    @Transactional(timeout = TRANSACTION_TIMEOUT_SECONDS)
     public SaleResponse cancel(Long id, CancelSaleRequest request, Long userId) {
         Instant cancelledAt = clock.instant().truncatedTo(ChronoUnit.MICROS);
         if (saleRepository.cancel(id, cancelledAt, userId, request.reason()) == 0) {

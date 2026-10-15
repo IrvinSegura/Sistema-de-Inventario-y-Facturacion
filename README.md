@@ -13,7 +13,8 @@ REST API for a grocery store: inventory, supplier purchases and sales with basic
 - Manual stock adjustments with a required reason (optionally idempotent), and a per-product stock ledger
   of every change.
 - Reports: sales by period (totals, payment methods, sellers, top products, daily breakdown in the store's
-  time zone) and a low-stock reorder list. Sellers only see their own sales.
+  time zone), a daily cash closing by payment method and a low-stock reorder list. Sellers only see their own
+  sales.
 
 Database design: [docs/data-model.md](docs/data-model.md).
 

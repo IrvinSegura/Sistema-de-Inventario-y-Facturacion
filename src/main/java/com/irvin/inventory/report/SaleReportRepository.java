@@ -23,7 +23,8 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 // Aggregations in SQL: summing in Java would load every sale of the period.
-// Range filters use ix_sale_date, or ix_sale_user_date when filtered by seller.
+// Sale date ranges use ix_sale_date (ix_sale_user_date by seller); cancellation ranges use the
+// partial ix_sale_cancelled_at, with the seller as a filter (cancellations are few).
 @Repository
 @RequiredArgsConstructor
 public class SaleReportRepository {
@@ -34,16 +35,31 @@ public class SaleReportRepository {
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
 
+    // The only date columns a period can filter on; an enum so no other text can reach the SQL.
+    public enum DateColumn {
+        SALE_DATE("s.sale_date"),
+        CANCELLED_AT("s.cancelled_at");
+
+        private final String sql;
+
+        DateColumn(String sql) {
+            this.sql = sql;
+        }
+    }
+
+    // Count and total of sales per payment method.
+    public record PaymentMethodAmount(PaymentMethod paymentMethod, long count, BigDecimal total) {
+    }
+
     // Local days [from, toExclusive) in the store's zone, optionally restricted to one seller.
     public record Period(LocalDate from, LocalDate toExclusive, ZoneId zone, Long sellerId) {
 
-        // PostgreSQL converts both the bounds and each sale's day with the same zone rules,
-        // so a sale can never pass the filter yet fall outside the daily breakdown.
-        // The bounds are constants per query, so ix_sale_date / ix_sale_user_date still apply.
-        // The seller condition is fixed SQL text; values always go as parameters.
-        String where() {
-            return " WHERE s.sale_date >= CAST(:from AS timestamp) AT TIME ZONE :zone"
-                    + " AND s.sale_date < CAST(:toExclusive AS timestamp) AT TIME ZONE :zone"
+        // PostgreSQL converts both the bounds and each row's day with the same zone rules, so a sale
+        // can never pass the filter yet fall outside the daily breakdown. The bounds are constants
+        // per query, so the date indexes still apply. Values always go as parameters.
+        String where(DateColumn column) {
+            return " WHERE " + column.sql + " >= CAST(:from AS timestamp) AT TIME ZONE :zone"
+                    + " AND " + column.sql + " < CAST(:toExclusive AS timestamp) AT TIME ZONE :zone"
                     + (sellerId == null ? "" : " AND s.user_id = :sellerId");
         }
 
@@ -58,12 +74,33 @@ public class SaleReportRepository {
         }
     }
 
+    // Cash closing: every sale rung up in the period, whatever its current status, since the money
+    // entered the drawer then. Payment methods without sales are missing.
+    public List<PaymentMethodAmount> salesByPaymentMethod(Period period) {
+        return amountsByPaymentMethod(period.where(DateColumn.SALE_DATE), period);
+    }
+
+    // Cash closing: cancellations made in the period, whatever the sale's date, since the money left
+    // the drawer then. Payment methods without cancellations are missing.
+    public List<PaymentMethodAmount> cancellationsByPaymentMethod(Period period) {
+        return amountsByPaymentMethod(period.where(DateColumn.CANCELLED_AT), period);
+    }
+
+    private List<PaymentMethodAmount> amountsByPaymentMethod(String where, Period period) {
+        return jdbcTemplate.query("""
+                SELECT s.payment_method, count(*) AS sale_count, sum(s.total) AS total
+                FROM sale s""" + where + " GROUP BY s.payment_method ORDER BY s.payment_method",
+                period.params(),
+                (rs, rowNum) -> new PaymentMethodAmount(PaymentMethod.valueOf(rs.getString("payment_method")),
+                        rs.getLong("sale_count"), money(rs.getBigDecimal("total"))));
+    }
+
     // Statuses without sales are missing from the map.
     public Map<SaleStatus, Totals> totalsByStatus(Period period) {
         List<Map.Entry<SaleStatus, Totals>> rows = jdbcTemplate.query("""
                 SELECT s.status, count(*) AS sale_count,
                        sum(s.subtotal) AS subtotal, sum(s.tax) AS tax, sum(s.total) AS total
-                FROM sale s""" + period.where() + " GROUP BY s.status",
+                FROM sale s""" + period.where(DateColumn.SALE_DATE) + " GROUP BY s.status",
                 period.params(),
                 (rs, rowNum) -> Map.entry(SaleStatus.valueOf(rs.getString("status")), new Totals(
                         rs.getLong("sale_count"), money(rs.getBigDecimal("subtotal")),
@@ -74,19 +111,15 @@ public class SaleReportRepository {
     }
 
     public List<PaymentMethodTotal> completedByPaymentMethod(Period period) {
-        return jdbcTemplate.query("""
-                SELECT s.payment_method, count(*) AS sale_count, sum(s.total) AS total
-                FROM sale s""" + period.where() + COMPLETED_ONLY
-                        + " GROUP BY s.payment_method ORDER BY s.payment_method",
-                period.params(),
-                (rs, rowNum) -> new PaymentMethodTotal(PaymentMethod.valueOf(rs.getString("payment_method")),
-                        rs.getLong("sale_count"), money(rs.getBigDecimal("total"))));
+        return amountsByPaymentMethod(period.where(DateColumn.SALE_DATE) + COMPLETED_ONLY, period).stream()
+                .map(amount -> new PaymentMethodTotal(amount.paymentMethod(), amount.count(), amount.total()))
+                .toList();
     }
 
     public List<SellerTotal> completedBySeller(Period period) {
         return jdbcTemplate.query("""
                 SELECT u.id, u.name, count(*) AS sale_count, sum(s.total) AS total
-                FROM sale s JOIN app_user u ON u.id = s.user_id""" + period.where() + COMPLETED_ONLY
+                FROM sale s JOIN app_user u ON u.id = s.user_id""" + period.where(DateColumn.SALE_DATE) + COMPLETED_ONLY
                         + " GROUP BY u.id, u.name ORDER BY total DESC, u.id",
                 period.params(),
                 (rs, rowNum) -> new SellerTotal(rs.getLong("id"), rs.getString("name"),
@@ -101,7 +134,8 @@ public class SaleReportRepository {
                 FROM (
                     SELECT si.product_id, sum(si.quantity) AS quantity, sum(si.subtotal) AS subtotal
                     FROM sale s
-                    JOIN sale_item si ON si.sale_id = s.id""" + period.where() + COMPLETED_ONLY + """
+                    JOIN sale_item si ON si.sale_id = s.id"""
+                        + period.where(DateColumn.SALE_DATE) + COMPLETED_ONLY + """
 
                     GROUP BY si.product_id
                     ORDER BY quantity DESC, si.product_id
@@ -119,7 +153,7 @@ public class SaleReportRepository {
         List<DailyTotal> days = jdbcTemplate.query("""
                 SELECT CAST(s.sale_date AT TIME ZONE :zone AS date) AS day, count(*) AS sale_count,
                        sum(s.total) AS total
-                FROM sale s""" + period.where() + COMPLETED_ONLY + " GROUP BY day ORDER BY day",
+                FROM sale s""" + period.where(DateColumn.SALE_DATE) + COMPLETED_ONLY + " GROUP BY day ORDER BY day",
                 period.params(),
                 (rs, rowNum) -> new DailyTotal(rs.getObject("day", LocalDate.class),
                         rs.getLong("sale_count"), money(rs.getBigDecimal("total"))));

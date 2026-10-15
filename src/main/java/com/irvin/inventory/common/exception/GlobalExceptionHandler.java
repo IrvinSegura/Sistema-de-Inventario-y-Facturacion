@@ -9,11 +9,13 @@ import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.TransactionTimedOutException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -69,6 +71,18 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(PessimisticLockingFailureException.class)
     ResponseEntity<ProblemDetail> handleLockTimeout(PessimisticLockingFailureException ex) {
         log.warn("Lock timeout: {}", ex.getMostSpecificCause().getMessage());
+        return busy();
+    }
+
+    // A transaction or report timeout expired: everything was rolled back, so a retry is safe
+    // (sales repeat their Idempotency-Key).
+    @ExceptionHandler({TransactionTimedOutException.class, QueryTimeoutException.class})
+    ResponseEntity<ProblemDetail> handleTimeout(Exception ex) {
+        log.warn("Timeout: {}", ex.getMessage());
+        return busy();
+    }
+
+    private static ResponseEntity<ProblemDetail> busy() {
         ProblemDetail body = ProblemDetail.forStatusAndDetail(
                 HttpStatus.SERVICE_UNAVAILABLE, "The resource is busy, please retry");
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
