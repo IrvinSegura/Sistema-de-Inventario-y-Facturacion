@@ -10,10 +10,12 @@ REST API for a grocery store: inventory, supplier purchases and sales with basic
 - Customers, with SAT's walk-in customer ("PUBLICO EN GENERAL") as the default.
 - Sales with server-side prices and per-line VAT, sequential sale numbers, a required `Idempotency-Key` and
   atomic cancellation that returns stock. Stock never goes negative, even when sellers race for the last unit.
+- Cash drawers: each seller opens the day's drawer with an opening float (required to sell) and closes it
+  with the counted cash, recording the expected cash and the surplus or shortage.
 - Manual stock adjustments with a required reason (optionally idempotent), and a per-product stock ledger
   of every change.
 - Reports: sales by period (totals, payment methods, sellers, top products, daily breakdown in the store's
-  time zone), a daily cash closing by payment method and a low-stock reorder list. Sellers only see their own
+  time zone), a daily cash closing by payment method with the day's drawers and a low-stock reorder list. Sellers only see their own
   sales.
 
 Database design: [docs/data-model.md](docs/data-model.md).
