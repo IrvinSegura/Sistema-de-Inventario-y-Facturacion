@@ -6,6 +6,7 @@ import java.util.List;
 
 import com.irvin.inventory.purchasing.Purchase;
 import com.irvin.inventory.purchasing.PurchaseItem;
+import io.swagger.v3.oas.annotations.media.Schema;
 
 public record PurchaseResponse(
         Long id,
@@ -18,6 +19,8 @@ public record PurchaseResponse(
     public record Ref(Long id, String name) {
     }
 
+    // Explicit name: springdoc names nested records by simple name, and four of them are "Item".
+    @Schema(name = "PurchaseItemResponse")
     public record Item(Long productId, String sku, String name, int quantity, BigDecimal unitCost, BigDecimal subtotal) {
 
         static Item from(PurchaseItem item) {

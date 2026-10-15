@@ -8,6 +8,7 @@ import com.irvin.inventory.sale.PaymentMethod;
 import com.irvin.inventory.sale.Sale;
 import com.irvin.inventory.sale.SaleItem;
 import com.irvin.inventory.sale.SaleStatus;
+import io.swagger.v3.oas.annotations.media.Schema;
 
 public record SaleResponse(
         Long id,
@@ -30,6 +31,8 @@ public record SaleResponse(
     public record Cancellation(Instant cancelledAt, Ref cancelledBy, String reason) {
     }
 
+    // Explicit name: springdoc names nested records by simple name, and four of them are "Item".
+    @Schema(name = "SaleItemResponse")
     public record Item(
             Long productId, String sku, String name, int quantity,
             BigDecimal unitPrice, BigDecimal taxRate, BigDecimal subtotal, BigDecimal tax) {
