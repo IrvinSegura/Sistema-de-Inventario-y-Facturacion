@@ -40,6 +40,9 @@ app:
   admin:
     email: ${ADMIN_EMAIL:}
     password: ${ADMIN_PASSWORD:}
+  cors:
+    # Comma-separated; the Vite dev server by default.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
   store:
     # Calendar days in reports ("sales on Oct 1") follow the store's local time.
     time-zone: America/Mexico_City

@@ -70,6 +70,7 @@ and the free database expires after a limited time; Flyway recreates the schema 
 |---|---|
 | `SPRING_PROFILES_ACTIVE` | `prod` in containers (reads the variables below) |
 | `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | PostgreSQL connection (`prod`; port defaults to 5432) |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated web client origins (default `http://localhost:5173`; none in `prod` unless set) |
 | `PORT` | HTTP port (`prod`; defaults to 8080, Render sets it) |
 | `JWT_SECRET` | Base64, at least 32 bytes (`openssl rand -base64 32`) |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Initial admin, created if none exists |

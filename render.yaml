@@ -36,6 +36,9 @@ services:
       # Random 256-bit value, Base64-encoded, generated once by Render.
       - key: JWT_SECRET
         generateValue: true
+      # Origin(s) of the web client, e.g. https://inventory-billing-web.onrender.com; set in the dashboard.
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
       # Asked in the dashboard when the Blueprint is created; never committed.
       - key: ADMIN_EMAIL
         sync: false

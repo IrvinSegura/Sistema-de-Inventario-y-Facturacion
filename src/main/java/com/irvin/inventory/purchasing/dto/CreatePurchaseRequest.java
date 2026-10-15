@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.util.List;
 
 import com.irvin.inventory.common.validation.LineLimits;
+import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
@@ -20,6 +21,8 @@ public record CreatePurchaseRequest(
         @NotEmpty @Size(max = 200) List<@Valid @NotNull Item> items) {
 
     // Limits keep every subtotal within NUMERIC(12,2).
+    // Explicit name: springdoc names nested records by simple name, and four of them are "Item".
+    @Schema(name = "CreatePurchaseItem")
     public record Item(
             @NotNull Long productId,
             @NotNull @Positive @Max(LineLimits.MAX_QUANTITY) Integer quantity,
