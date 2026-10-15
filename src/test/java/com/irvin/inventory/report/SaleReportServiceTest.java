@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 
 import com.irvin.inventory.common.exception.BadRequestException;
+import com.irvin.inventory.common.exception.ConflictException;
 import com.irvin.inventory.config.StoreProperties;
 import com.irvin.inventory.report.SaleReportRepository.PaymentMethodAmount;
 import com.irvin.inventory.report.dto.CashClosingResponse;
@@ -25,10 +26,13 @@ import com.irvin.inventory.report.dto.CashClosingResponse.Amounts;
 import com.irvin.inventory.report.dto.SaleReportResponse;
 import com.irvin.inventory.report.dto.SaleReportResponse.DailyTotal;
 import com.irvin.inventory.report.dto.SaleReportResponse.Totals;
+import com.irvin.inventory.sale.CashDrawer;
+import com.irvin.inventory.sale.CashDrawerRepository;
 import com.irvin.inventory.sale.PaymentMethod;
 import com.irvin.inventory.sale.SaleStatus;
 import com.irvin.inventory.security.CurrentUser;
 import com.irvin.inventory.user.Role;
+import com.irvin.inventory.user.User;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -43,9 +47,10 @@ class SaleReportServiceTest {
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-03-11T03:00:00Z"), ZoneOffset.UTC);
 
     private final SaleReportRepository repository = mock(SaleReportRepository.class);
+    private final CashDrawerRepository cashDrawerRepository = mock(CashDrawerRepository.class);
     private final PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
     private final SaleReportService service =
-            new SaleReportService(repository, new StoreProperties(ZONE), CLOCK, transactionManager);
+            new SaleReportService(repository, cashDrawerRepository, new StoreProperties(ZONE), CLOCK, transactionManager);
 
     @Test
     void sellerIsAlwaysScopedToTheirOwnSales() {
@@ -128,6 +133,7 @@ class SaleReportServiceTest {
                 ArgumentCaptor.forClass(SaleReportRepository.Period.class);
         verify(repository).salesByPaymentMethod(sales.capture());
         verify(repository).cancellationsByPaymentMethod(cancellations.capture());
+        verify(cashDrawerRepository).findByBusinessDateAndUserId(DAY, SELLER.id());
         assertThat(sales.getValue().from()).isEqualTo(DAY);
         assertThat(sales.getValue().toExclusive()).isEqualTo(DAY.plusDays(1));
         assertThat(sales.getValue().sellerId()).isEqualTo(SELLER.id());
@@ -135,12 +141,14 @@ class SaleReportServiceTest {
     }
 
     @Test
-    void cashClosingNetsCancellationsPerPaymentMethod() {
+    void cashClosingNetsCancellationsPerPaymentMethodAndAddsTheOpeningFloats() {
         when(repository.salesByPaymentMethod(any())).thenReturn(List.of(
                 new PaymentMethodAmount(PaymentMethod.CARD, 1, new BigDecimal("20.00")),
                 new PaymentMethodAmount(PaymentMethod.CASH, 3, new BigDecimal("30.00"))));
         when(repository.cancellationsByPaymentMethod(any())).thenReturn(List.of(
                 new PaymentMethodAmount(PaymentMethod.CASH, 2, new BigDecimal("12.50"))));
+        when(cashDrawerRepository.findByBusinessDateOrderByUserId(DAY))
+                .thenReturn(List.of(drawer(2L, "100.00"), drawer(3L, "50.00")));
 
         CashClosingResponse closing = service.cashClosing(DAY, null, ADMIN);
 
@@ -148,9 +156,39 @@ class SaleReportServiceTest {
                 .containsExactly(PaymentMethod.CASH, PaymentMethod.CARD, PaymentMethod.TRANSFER);
         assertThat(closing.byPaymentMethod().get(PaymentMethod.CASH).net()).isEqualTo(new BigDecimal("17.50"));
         assertThat(closing.byPaymentMethod().get(PaymentMethod.TRANSFER)).isEqualTo(Amounts.NONE);
-        assertThat(closing.expectedCash()).isEqualTo(new BigDecimal("17.50"));
+        assertThat(closing.openingFloat()).isEqualTo(new BigDecimal("150.00"));
+        assertThat(closing.expectedCash()).isEqualTo(new BigDecimal("167.50"));
         assertThat(closing.total()).isEqualTo(new Amounts(4, new BigDecimal("50.00"), 2,
                 new BigDecimal("12.50"), new BigDecimal("37.50")));
+    }
+
+    @Test
+    void cashClosingWithoutDrawersExpectsOnlyTheNetCash() {
+        when(repository.salesByPaymentMethod(any())).thenReturn(List.of(
+                new PaymentMethodAmount(PaymentMethod.CASH, 1, new BigDecimal("8.00"))));
+
+        CashClosingResponse closing = service.cashClosing(DAY, null, ADMIN);
+
+        assertThat(closing.openingFloat()).isEqualTo(new BigDecimal("0.00"));
+        assertThat(closing.expectedCash()).isEqualTo(new BigDecimal("8.00"));
+        assertThat(closing.drawers()).isEmpty();
+    }
+
+    @Test
+    void sellerGetsTheCashClosingOnlyOnceTheirDrawerIsClosed() {
+        when(cashDrawerRepository.findByBusinessDateAndUserId(DAY, SELLER.id()))
+                .thenReturn(List.of(drawer(SELLER.id(), "100.00")));
+
+        assertThatThrownBy(() -> service.cashClosing(DAY, null, SELLER)).isInstanceOf(ConflictException.class);
+        // Admins audit open drawers.
+        assertThat(service.cashClosing(DAY, SELLER.id(), ADMIN).openingFloat()).isEqualTo(new BigDecimal("100.00"));
+    }
+
+    private static CashDrawer drawer(Long userId, String openingFloat) {
+        User user = new User();
+        user.setId(userId);
+        user.setName("Seller " + userId);
+        return CashDrawer.open(user, DAY, new BigDecimal(openingFloat), Instant.parse("2026-03-10T15:00:00Z"));
     }
 
     @Test
@@ -171,7 +209,7 @@ class SaleReportServiceTest {
     }
 
     private SaleReportService serviceAt(String instant) {
-        return new SaleReportService(repository, new StoreProperties(ZONE),
+        return new SaleReportService(repository, cashDrawerRepository, new StoreProperties(ZONE),
                 Clock.fixed(Instant.parse(instant), ZoneOffset.UTC), transactionManager);
     }
 

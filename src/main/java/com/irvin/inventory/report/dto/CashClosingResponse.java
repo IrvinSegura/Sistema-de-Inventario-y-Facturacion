@@ -2,9 +2,11 @@ package com.irvin.inventory.report.dto;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 
 import com.irvin.inventory.sale.PaymentMethod;
+import com.irvin.inventory.sale.dto.CashDrawerResponse;
 
 // Money that moved through the checkout on one local day: sales count on the day they were rung up,
 // cancellations on the day they were made. Once "closed", later cancellations land on their own day,
@@ -19,9 +21,13 @@ public record CashClosingResponse(
         // Every payment method, including those without movements, in a fixed order.
         Map<PaymentMethod, Amounts> byPaymentMethod,
         Amounts total,
-        // Cash that should be in the drawer, on top of the opening float. Can be negative when
-        // cancellations exceed sales that day.
-        BigDecimal expectedCash) {
+        // Sum of the opening floats of the day's drawers.
+        BigDecimal openingFloat,
+        // Cash that should be in the drawers now: openingFloat + net cash. Unlike a drawer's closing
+        // snapshot, it includes cancellations made after the drawer was closed.
+        BigDecimal expectedCash,
+        // The day's drawers by user; just the viewer's for sellers.
+        List<CashDrawerResponse> drawers) {
 
     // net = salesTotal - cancellationsTotal; can be negative.
     public record Amounts(

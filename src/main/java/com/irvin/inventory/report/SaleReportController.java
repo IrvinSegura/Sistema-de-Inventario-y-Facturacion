@@ -44,11 +44,12 @@ public class SaleReportController {
 
     @Operation(summary = "Cash closing for one day, by payment method",
             description = "Sales rung up that day (even if cancelled later) minus cancellations made that day "
-                    + "(even of older sales); expectedCash is the net cash for the drawer. Nets can be negative "
-                    + "when cancellations exceed sales. 'closed' turns true "
+                    + "(even of older sales), plus the day's cash drawers; expectedCash is their opening floats "
+                    + "plus the net cash. Nets can be negative when cancellations exceed sales. 'closed' turns true "
                     + 2 * SaleService.TRANSACTION_TIMEOUT_SECONDS + " s after the day ends; until then, "
                     + "sales still being recorded can change the figures. Sellers get their own drawer: their "
-                    + "sales and the cancellations of their sales.")
+                    + "sales and the cancellations of their sales, only once their drawer for that day is "
+                    + "closed (blind count, 409 before).")
     @GetMapping("/cash-closing")
     public CashClosingResponse cashClosing(
             @Parameter(description = "Day in the store's time zone; defaults to today")

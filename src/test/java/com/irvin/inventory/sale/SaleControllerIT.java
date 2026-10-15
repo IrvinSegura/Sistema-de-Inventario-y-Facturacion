@@ -506,7 +506,7 @@ class SaleControllerIT extends AbstractIntegrationTest {
     @Test
     void sellersOnlySeeTheirOwnSales() throws Exception {
         CreatedUser seller = createSeller();
-        String sellerToken = loginOk(seller.email(), DEFAULT_PASSWORD).accessToken();
+        String sellerToken = sellerToken(seller);
         String otherToken = sellerToken();
         String adminToken = adminAccessToken();
         Long product = createPricedProduct("1", "0");

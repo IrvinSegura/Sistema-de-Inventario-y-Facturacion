@@ -5,6 +5,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -15,8 +16,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicReference;
 
+import com.irvin.inventory.config.StoreProperties;
 import com.jayway.jsonpath.JsonPath;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -41,6 +45,11 @@ public abstract class AbstractIntegrationTest {
     protected static final String ADMIN_EMAIL = "admin@test.com";
     protected static final String ADMIN_PASSWORD = "admin-password";
     protected static final String DEFAULT_PASSWORD = "user-password";
+    protected static final String CASH_DRAWERS = "/api/v1/cash-drawers";
+
+    // Sales need an open cash drawer; the admin's is shared by every test, so none may close it.
+    // Its local day: a run that crosses midnight closes it and opens the new day's.
+    private static final AtomicReference<LocalDate> ADMIN_DRAWER_DAY = new AtomicReference<>();
 
     @Autowired
     protected MockMvc mockMvc;
@@ -48,6 +57,31 @@ public abstract class AbstractIntegrationTest {
     // Direct SQL for assertions and for state the API can't set (e.g. past dates).
     @Autowired
     protected JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private StoreProperties storeProperties;
+
+    @BeforeEach
+    void openAdminDrawer() throws Exception {
+        LocalDate today = LocalDate.now(storeProperties.timeZone());
+        if (today.equals(ADMIN_DRAWER_DAY.get())) {
+            return;
+        }
+        jdbcTemplate.update("""
+                UPDATE cash_drawer
+                SET closed_at = now(), closed_by = user_id, expected_cash = opening_float, counted_cash = opening_float
+                WHERE closed_at IS NULL AND user_id = (SELECT id FROM app_user WHERE email = ?)""", ADMIN_EMAIL);
+        openDrawer(adminAccessToken(), "0");
+        ADMIN_DRAWER_DAY.set(today);
+    }
+
+    // Opens today's drawer of the token's user.
+    protected Long openDrawer(String accessToken, String openingFloat) throws Exception {
+        return readId(postJson(CASH_DRAWERS, """
+                {"openingFloat": %s}
+                """.formatted(openingFloat), accessToken)
+                .andExpect(status().isCreated()));
+    }
 
     protected int stock(Long productId) {
         return jdbcTemplate.queryForObject("SELECT stock FROM product WHERE id = ?", Integer.class, productId);
@@ -179,8 +213,16 @@ public abstract class AbstractIntegrationTest {
         return letters + "990101" + random.nextInt(100, 1000);
     }
 
+    // A new seller with today's drawer open (zero opening float), ready to sell.
     protected String sellerToken() throws Exception {
-        return loginOk(createSeller().email(), DEFAULT_PASSWORD).accessToken();
+        return sellerToken(createSeller());
+    }
+
+    // Logs the user in and opens today's drawer (zero opening float).
+    protected String sellerToken(CreatedUser seller) throws Exception {
+        String token = loginOk(seller.email(), DEFAULT_PASSWORD).accessToken();
+        openDrawer(token, "0");
+        return token;
     }
 
     // Unique SKU per call, in the seeded Pantry category.
