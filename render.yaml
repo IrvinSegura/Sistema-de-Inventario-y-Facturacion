@@ -1,0 +1,53 @@
+# Render Blueprint: the API (Docker) and its PostgreSQL. Deploys main once CI passes.
+services:
+  - type: web
+    name: inventory-billing-system
+    runtime: docker
+    plan: free
+    region: ohio
+    branch: main
+    dockerfilePath: ./Dockerfile
+    autoDeployTrigger: checksPass
+    # Includes the database check, so a deploy that can't reach PostgreSQL never goes live.
+    healthCheckPath: /actuator/health
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+      - key: DB_HOST
+        fromDatabase:
+          name: inventory-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: inventory-db
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: inventory-db
+          property: database
+      - key: DB_USER
+        fromDatabase:
+          name: inventory-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: inventory-db
+          property: password
+      # Random 256-bit value, Base64-encoded, generated once by Render.
+      - key: JWT_SECRET
+        generateValue: true
+      # Asked in the dashboard when the Blueprint is created; never committed.
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+
+databases:
+  - name: inventory-db
+    plan: free
+    region: ohio
+    databaseName: inventory
+    user: inventory
+    postgresMajorVersion: "17"
+    # Reachable only from Render's private network (the API), not from the internet.
+    ipAllowList: []

@@ -1,0 +1,20 @@
+# Production (container): every value comes from env vars, documented in the README.
+server:
+  # Render injects PORT; 8080 elsewhere.
+  port: ${PORT:8080}
+  # Behind a TLS-terminating proxy: honor X-Forwarded-* so generated URLs (Swagger) use https.
+  forward-headers-strategy: framework
+
+spring:
+  datasource:
+    # Separate parts because hosting providers expose them that way (not as a JDBC URL).
+    url: jdbc:postgresql://${DB_HOST}:${DB_PORT:5432}/${DB_NAME}
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+
+# Public on purpose: the API docs are part of the portfolio demo (endpoints still require a token).
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

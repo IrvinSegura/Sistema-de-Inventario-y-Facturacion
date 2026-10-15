@@ -37,6 +37,27 @@ Requires JDK 21 and Docker.
 
 API docs: http://localhost:8080/swagger-ui.html
 
+## Run with Docker
+
+The image packages the app only (tests run in CI). Against any PostgreSQL:
+
+```bash
+docker build -t inventory-billing-system .
+docker run -p 8080:8080 -e SPRING_PROFILES_ACTIVE=prod -e DB_HOST=... -e DB_NAME=... -e DB_USER=... -e DB_PASSWORD=... -e JWT_SECRET=... -e ADMIN_EMAIL=... -e ADMIN_PASSWORD=... inventory-billing-system
+```
+
+## Deploy (Render)
+
+`render.yaml` is a Render Blueprint: the API (Docker, free plan) plus a private PostgreSQL 17.
+
+1. In Render: **New > Blueprint**, pick this repository.
+2. Fill in `ADMIN_EMAIL` and `ADMIN_PASSWORD` when asked; `JWT_SECRET` is generated and the database
+   variables are wired automatically.
+3. Every push to `main` deploys once CI passes; `/actuator/health` (database included) gates each deploy.
+
+On the free plan the service sleeps after a few idle minutes (the first request takes about a minute)
+and the free database expires after a limited time; Flyway recreates the schema on a new one.
+
 ## Tests
 
 ```bash
@@ -47,6 +68,8 @@ API docs: http://localhost:8080/swagger-ui.html
 
 | Variable | Description |
 |---|---|
-| `SPRING_DATASOURCE_URL` / `_USERNAME` / `_PASSWORD` | PostgreSQL connection (production) |
+| `SPRING_PROFILES_ACTIVE` | `prod` in containers (reads the variables below) |
+| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | PostgreSQL connection (`prod`; port defaults to 5432) |
+| `PORT` | HTTP port (`prod`; defaults to 8080, Render sets it) |
 | `JWT_SECRET` | Base64, at least 32 bytes (`openssl rand -base64 32`) |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Initial admin, created if none exists |
