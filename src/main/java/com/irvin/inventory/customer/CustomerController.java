@@ -26,8 +26,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-// Sellers register customers at the checkout; tax ID changes and deactivation are ADMIN only.
-@Tag(name = "Customers", description = "Any user; tax ID and active flag: ADMIN only. "
+// Sellers register customers at the checkout; tax ID changes and deactivation are for admins and supervisors.
+@Tag(name = "Customers", description = "Any user; tax ID and active flag: ADMIN or SUPERVISOR. "
         + "The walk-in customer (PUBLICO EN GENERAL) is read-only")
 @RestController
 @RequestMapping("/api/v1/customers")
@@ -59,7 +59,7 @@ public class CustomerController {
     }
 
     @Operation(summary = "Update a customer (send the version you loaded)",
-            description = "Changing the tax ID or the active flag requires ADMIN (403 for sellers).")
+            description = "Changing the tax ID or the active flag requires ADMIN or SUPERVISOR (403 for sellers).")
     @PutMapping("/{id}")
     public CustomerResponse update(
             @PathVariable Long id,

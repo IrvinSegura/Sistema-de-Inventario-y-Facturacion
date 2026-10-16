@@ -98,7 +98,7 @@ public class SaleReportService {
     // Sellers only get their own sales (and, in the cash closing, the cancellations of those sales,
     // whoever made them), whatever seller filter they sent.
     private static Long scopedSellerId(Long sellerId, CurrentUser viewer) {
-        return viewer.isAdmin() ? sellerId : viewer.id();
+        return viewer.isManager() ? sellerId : viewer.id();
     }
 
     private SaleReportResponse buildSalesReport(LocalDate from, LocalDate to, ZoneId zone,
@@ -136,7 +136,7 @@ public class SaleReportService {
                 .stream().map(CashDrawerResponse::from).toList();
         // Blind count: a seller who knew the expected cash could declare exactly that and pocket any
         // surplus. Hiding only the cash figures isn't enough, since they follow from the other ones.
-        if (!viewer.isAdmin() && drawers.stream().anyMatch(drawer -> drawer.closing() == null)) {
+        if (!viewer.isManager() && drawers.stream().anyMatch(drawer -> drawer.closing() == null)) {
             throw new ConflictException("Close your cash drawer before viewing its cash closing");
         }
         Map<PaymentMethod, PaymentMethodAmount> sales =

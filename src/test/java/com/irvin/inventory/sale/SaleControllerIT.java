@@ -77,9 +77,9 @@ class SaleControllerIT extends AbstractIntegrationTest {
         String sku = jdbcTemplate.queryForObject("SELECT sku FROM product WHERE id = ?", String.class, product);
 
         putJson("/api/v1/products/" + product, """
-                {"sku": "%s", "name": "Repriced", "categoryId": %d, "salePrice": 99, "taxRate": 0,
+                {"sku": "%s", "name": "Repriced %s", "categoryId": %d, "salePrice": 99, "taxRate": 0,
                  "minStock": 0, "active": true, "version": 0}
-                """.formatted(sku, categoryId("Pantry")), adminToken).andExpect(status().isOk());
+                """.formatted(sku, sku, categoryId("Pantry")), adminToken).andExpect(status().isOk());
 
         getJson("/api/v1/sales/" + saleId, adminToken)
                 .andExpect(jsonPath("$.items[0].unitPrice").value(10.0))

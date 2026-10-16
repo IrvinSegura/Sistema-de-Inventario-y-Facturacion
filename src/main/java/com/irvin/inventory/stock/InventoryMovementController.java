@@ -2,6 +2,7 @@ package com.irvin.inventory.stock;
 
 import java.time.Instant;
 
+import com.irvin.inventory.security.Roles;
 import com.irvin.inventory.stock.dto.InventoryMovementResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -22,7 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(name = "Stock")
 @RestController
 @RequestMapping(InventoryMovementController.PATH)
-@PreAuthorize("hasRole('ADMIN')")
+@PreAuthorize(Roles.MANAGERS)
 @RequiredArgsConstructor
 public class InventoryMovementController {
 

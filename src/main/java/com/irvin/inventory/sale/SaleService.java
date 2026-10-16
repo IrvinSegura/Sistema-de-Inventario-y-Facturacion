@@ -142,7 +142,7 @@ public class SaleService {
 
     @Transactional(readOnly = true)
     public Page<SaleSummaryResponse> search(SaleSearch search, Pageable pageable, CurrentUser viewer) {
-        SaleSearch scoped = viewer.isAdmin() ? search : search.withSeller(viewer.id());
+        SaleSearch scoped = viewer.isManager() ? search : search.withSeller(viewer.id());
         Pageable sorted = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), DEFAULT_SORT);
         return saleRepository.findAll(scoped.toSpecification(), sorted).map(SaleSummaryResponse::from);
     }
@@ -151,7 +151,7 @@ public class SaleService {
     @Transactional(readOnly = true)
     public SaleResponse findById(Long id, CurrentUser viewer) {
         Sale sale = saleRepository.findDetailedById(id)
-                .filter(found -> viewer.isAdmin() || found.getUser().getId().equals(viewer.id()))
+                .filter(found -> viewer.isManager() || found.getUser().getId().equals(viewer.id()))
                 .orElseThrow(SaleService::notFound);
         return SaleResponse.from(sale);
     }

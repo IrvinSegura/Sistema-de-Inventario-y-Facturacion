@@ -16,9 +16,11 @@ public record ProductSearch(String text, Long categoryId, boolean active, boolea
             predicates.add(cb.equal(root.get("active"), active));
             if (text != null && !text.isBlank()) {
                 String pattern = Like.containsIgnoreCase(text);
+                // Barcode: exact match only, so a scanned code finds its product (active or not).
                 predicates.add(cb.or(
                         cb.like(cb.lower(root.get("name")), pattern, Like.ESCAPE),
-                        cb.like(cb.lower(root.get("sku")), pattern, Like.ESCAPE)));
+                        cb.like(cb.lower(root.get("sku")), pattern, Like.ESCAPE),
+                        cb.equal(root.get("barcode"), text.trim())));
             }
             if (categoryId != null) {
                 predicates.add(cb.equal(root.get("category").get("id"), categoryId));

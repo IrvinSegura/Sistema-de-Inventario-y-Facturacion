@@ -176,8 +176,9 @@ public abstract class AbstractIntegrationTest {
                 .andExpect(status().isCreated()));
     }
 
+    // Product names are unique, so the default one carries a random suffix.
     protected Long createProduct(Long categoryId, int minStock) throws Exception {
-        return createProduct("Test product", categoryId, minStock);
+        return createProduct("Test product " + UUID.randomUUID(), categoryId, minStock);
     }
 
     // Unique SKU per call.
@@ -229,8 +230,8 @@ public abstract class AbstractIntegrationTest {
     // Unique SKU per call, in the seeded Pantry category.
     protected Long createPricedProduct(String salePrice, String taxRate) throws Exception {
         return readId(postJson("/api/v1/products", """
-                {"sku": "%s", "name": "Sale product", "categoryId": %d, "salePrice": %s, "taxRate": %s, "minStock": 0}
-                """.formatted(uniqueSku(), categoryId("Pantry"), salePrice, taxRate), adminAccessToken())
+                {"sku": "%s", "name": "Sale product %s", "categoryId": %d, "salePrice": %s, "taxRate": %s, "minStock": 0}
+                """.formatted(uniqueSku(), UUID.randomUUID(), categoryId("Pantry"), salePrice, taxRate), adminAccessToken())
                 .andExpect(status().isCreated()));
     }
 

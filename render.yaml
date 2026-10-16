@@ -44,6 +44,13 @@ services:
         sync: false
       - key: ADMIN_PASSWORD
         sync: false
+      # Product images; without them uploads answer 503 (the disk is wiped on every deploy).
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
 
 databases:
   - name: inventory-db

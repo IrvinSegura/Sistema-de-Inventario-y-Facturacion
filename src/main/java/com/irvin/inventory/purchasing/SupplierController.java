@@ -5,6 +5,7 @@ import java.net.URI;
 import com.irvin.inventory.purchasing.dto.CreateSupplierRequest;
 import com.irvin.inventory.purchasing.dto.SupplierResponse;
 import com.irvin.inventory.purchasing.dto.UpdateSupplierRequest;
+import com.irvin.inventory.security.Roles;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -24,10 +25,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-@Tag(name = "Suppliers", description = "ADMIN only")
+@Tag(name = "Suppliers", description = "ADMIN or SUPERVISOR")
 @RestController
 @RequestMapping("/api/v1/suppliers")
-@PreAuthorize("hasRole('ADMIN')")
+@PreAuthorize(Roles.MANAGERS)
 @RequiredArgsConstructor
 public class SupplierController {
 

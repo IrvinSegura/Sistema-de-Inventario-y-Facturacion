@@ -7,6 +7,7 @@ import java.util.UUID;
 import com.irvin.inventory.purchasing.dto.CreatePurchaseRequest;
 import com.irvin.inventory.purchasing.dto.PurchaseResponse;
 import com.irvin.inventory.purchasing.dto.PurchaseSummaryResponse;
+import com.irvin.inventory.security.Roles;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -29,10 +30,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-@Tag(name = "Purchases", description = "Stock in from suppliers. ADMIN only")
+@Tag(name = "Purchases", description = "Stock in from suppliers. ADMIN or SUPERVISOR")
 @RestController
 @RequestMapping("/api/v1/purchases")
-@PreAuthorize("hasRole('ADMIN')")
+@PreAuthorize(Roles.MANAGERS)
 @RequiredArgsConstructor
 public class PurchaseController {
 

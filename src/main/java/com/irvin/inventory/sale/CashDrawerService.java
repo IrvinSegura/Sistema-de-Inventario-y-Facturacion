@@ -87,7 +87,7 @@ public class CashDrawerService {
         // Owner first, without a lock (a projection, so no stale entity stays in the persistence
         // context): probing other users' ids must not block their sales.
         cashDrawerRepository.findUserIdById(id)
-                .filter(ownerId -> actor.isAdmin() || ownerId.equals(actor.id()))
+                .filter(ownerId -> actor.isManager() || ownerId.equals(actor.id()))
                 .orElseThrow(CashDrawerService::notFound);
         CashDrawer drawer = cashDrawerRepository.findByIdForUpdate(id).orElseThrow(CashDrawerService::notFound);
         if (!drawer.isOpen()) {
@@ -123,13 +123,13 @@ public class CashDrawerService {
 
     @Transactional(readOnly = true)
     public Page<CashDrawerResponse> search(CashDrawerSearch search, Pageable pageable, CurrentUser viewer) {
-        CashDrawerSearch scoped = viewer.isAdmin() ? search : search.withUser(viewer.id());
+        CashDrawerSearch scoped = viewer.isManager() ? search : search.withUser(viewer.id());
         Pageable sorted = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), DEFAULT_SORT);
         return cashDrawerRepository.findAll(scoped.toSpecification(), sorted).map(CashDrawerResponse::from);
     }
 
     private static boolean isVisibleTo(CashDrawer drawer, CurrentUser viewer) {
-        return viewer.isAdmin() || drawer.getUser().getId().equals(viewer.id());
+        return viewer.isManager() || drawer.getUser().getId().equals(viewer.id());
     }
 
     private static NotFoundException notFound() {

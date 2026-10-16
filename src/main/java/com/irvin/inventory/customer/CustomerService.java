@@ -64,7 +64,7 @@ public class CustomerService {
         // Past sales show the customer's current data, and deactivation blocks other checkouts.
         boolean sensitiveChange = !Objects.equals(customer.getTaxId(), request.taxId())
                 || customer.isActive() != request.active();
-        if (sensitiveChange && !editor.isAdmin()) {
+        if (sensitiveChange && !editor.isManager()) {
             throw new ForbiddenException("Only an admin can change a customer's tax ID or active status");
         }
         if (request.taxId() != null && customerRepository.existsByTaxIdAndIdNot(request.taxId(), id)) {

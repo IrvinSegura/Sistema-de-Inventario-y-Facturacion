@@ -5,3 +5,7 @@ app:
   admin:
     email: admin@test.com
     password: admin-password
+  images:
+    # Inside target/, so `mvnw clean` removes uploads made by tests.
+    local:
+      dir: target/test-images

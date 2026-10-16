@@ -22,6 +22,10 @@ app:
   password-reset:
     # Reset codes are secrets: never in production logs.
     log-codes: false
+  images:
+    local:
+      # Render's disk is wiped on every deploy: without Cloudinary, uploads answer 503.
+      enabled: false
 
 # Public on purpose: the API docs are part of the portfolio demo (endpoints still require a token).
 springdoc:

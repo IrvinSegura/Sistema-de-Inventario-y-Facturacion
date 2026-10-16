@@ -5,7 +5,8 @@ REST API for a grocery store: inventory, supplier purchases and sales with basic
 ## Features
 
 - JWT authentication with `ADMIN` and `SELLER` roles.
-- Product catalog with categories, per-product VAT (0% / 16%), barcode lookup and search.
+- Product catalog with categories, per-product VAT (0% / 16%), barcode lookup, search and product photos
+  (PNG, JPEG, WebP or GIF, checked by content; Cloudinary in production, a local folder in development).
 - Supplier purchases with concurrency-safe stock and idempotent requests.
 - Customers, with SAT's walk-in customer ("PUBLICO EN GENERAL") as the default.
 - Sales with server-side prices and per-line VAT, sequential sale numbers, a required `Idempotency-Key` and
@@ -79,5 +80,8 @@ single instance; scaling out needs a shared store for the limits.
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Initial admin, created if none exists |
 | `MAIL_HOST` / `MAIL_PORT` / `MAIL_USERNAME` / `MAIL_PASSWORD` / `MAIL_FROM` | SMTP for password reset codes by email (optional; port defaults to 587 with STARTTLS) |
 | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` | Twilio for password reset codes by SMS (optional; number in E.164) |
+| `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | Cloudinary for product images (required for uploads in `prod`; elsewhere images go to `uploads/images`) |
+| `IMAGES_BASE_URL` | Public URL of the local images folder (default `http://localhost:8080/images`; not used with Cloudinary) |
 
 Without SMTP or Twilio settings, reset codes for that channel aren't sent; outside `prod` they are written to the log so the flow can be tried locally.
+Without Cloudinary settings, image uploads answer 503 in `prod` (Render's disk is wiped on every deploy).

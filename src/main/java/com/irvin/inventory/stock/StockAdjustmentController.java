@@ -4,6 +4,7 @@ import java.net.URI;
 import java.util.UUID;
 
 import com.irvin.inventory.security.CurrentUser;
+import com.irvin.inventory.security.Roles;
 import com.irvin.inventory.stock.dto.CreateStockAdjustmentRequest;
 import com.irvin.inventory.stock.dto.InventoryMovementResponse;
 import io.swagger.v3.oas.annotations.Operation;
@@ -20,10 +21,10 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-@Tag(name = "Stock", description = "Manual adjustments and the stock ledger. ADMIN only")
+@Tag(name = "Stock", description = "Manual adjustments and the stock ledger. ADMIN or SUPERVISOR")
 @RestController
 @RequestMapping("/api/v1/stock-adjustments")
-@PreAuthorize("hasRole('ADMIN')")
+@PreAuthorize(Roles.MANAGERS)
 @RequiredArgsConstructor
 public class StockAdjustmentController {
 
