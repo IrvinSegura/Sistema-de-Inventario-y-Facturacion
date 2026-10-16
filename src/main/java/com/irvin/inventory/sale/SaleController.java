@@ -63,6 +63,8 @@ public class SaleController {
             @RequestParam(required = false) Long saleNumber,
             @RequestParam(required = false) Long customerId,
             @Parameter(description = "Ignored for sellers") @RequestParam(required = false) Long sellerId,
+            @Parameter(description = "Sales recorded in this cash drawer; sellers still get only their own")
+            @RequestParam(required = false) Long cashDrawerId,
             @RequestParam(required = false) SaleStatus status,
             @Parameter(description = "Inclusive, ISO-8601 instant")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
@@ -70,8 +72,8 @@ public class SaleController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
             @ParameterObject Pageable pageable,
             @AuthenticationPrincipal Jwt jwt) {
-        return saleService.search(new SaleSearch(saleNumber, customerId, sellerId, status, from, to), pageable,
-                CurrentUser.from(jwt));
+        return saleService.search(new SaleSearch(saleNumber, customerId, sellerId, cashDrawerId, status, from, to),
+                pageable, CurrentUser.from(jwt));
     }
 
     @Operation(summary = "Get a sale with its items")

@@ -9,10 +9,12 @@ import com.irvin.inventory.common.exception.BadRequestException;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.jpa.domain.Specification;
 
-// Sale filters; null values are ignored. The date range is [from, to).
+// Sale filters; null values are ignored. The date range is [from, to); cashDrawerId matches the
+// drawer the sale was recorded in.
 // Validated on construction, so a bad range fails before any transaction or query.
 public record SaleSearch(
-        Long saleNumber, Long customerId, Long sellerId, SaleStatus status, Instant from, Instant to) {
+        Long saleNumber, Long customerId, Long sellerId, Long cashDrawerId, SaleStatus status, Instant from,
+        Instant to) {
 
     public SaleSearch {
         DateBounds.requireWithin(from, to);
@@ -23,7 +25,7 @@ public record SaleSearch(
 
     // Sellers only see their own sales, whatever seller filter they sent.
     SaleSearch withSeller(Long sellerId) {
-        return new SaleSearch(saleNumber, customerId, sellerId, status, from, to);
+        return new SaleSearch(saleNumber, customerId, sellerId, cashDrawerId, status, from, to);
     }
 
     Specification<Sale> toSpecification() {
@@ -37,6 +39,9 @@ public record SaleSearch(
             }
             if (sellerId != null) {
                 predicates.add(cb.equal(root.get("user").get("id"), sellerId));
+            }
+            if (cashDrawerId != null) {
+                predicates.add(cb.equal(root.get("cashDrawer").get("id"), cashDrawerId));
             }
             if (status != null) {
                 predicates.add(cb.equal(root.get("status"), status));

@@ -36,7 +36,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 // Lock order: idempotency key -> seller's cash drawer (FOR SHARE) -> customer (FOR SHARE) -> product rows by id.
-// Cancellation: seller's cash drawer (FOR SHARE) -> sale row -> product rows by id.
+// Cancellation: the seller's drawer of today (FOR SHARE) -> sale row -> product rows by id.
 @Service
 @RequiredArgsConstructor
 public class SaleService {
@@ -79,7 +79,7 @@ public class SaleService {
         // PostgreSQL stores microseconds; truncating keeps this response equal to later reads.
         Instant saleDate = clock.instant().truncatedTo(ChronoUnit.MICROS);
         // After the replay check: retrying a recorded sale still works once the drawer is closed.
-        cashDrawerService.requireOpenForSale(userId, saleDate);
+        CashDrawer drawer = cashDrawerService.requireOpenForSale(userId, saleDate);
         Customer customer = lockActiveCustomer(request.customerId());
         // Product id order: concurrent sales and purchases lock product rows in the same order.
         List<CreateSaleRequest.Item> items = request.items().stream()
@@ -90,6 +90,7 @@ public class SaleService {
         Sale sale = new Sale();
         sale.setCustomer(customer);
         sale.setUser(userRepository.getReferenceById(userId));
+        sale.setCashDrawer(drawer);
         sale.setSaleDate(saleDate);
         sale.setPaymentMethod(request.paymentMethod());
         sale.setIdempotencyKey(idempotencyKey);
@@ -121,17 +122,18 @@ public class SaleService {
     }
 
     // The seller's drawer comes first and cancelled_at is stamped after it, so a closing in progress
-    // either counts this cancellation or ends before it. Then the status change: a concurrent
-    // cancellation updates no rows and never touches stock.
+    // either counts this refund or ends before it (the refund then comes out of no drawer). Then the
+    // status change: a concurrent cancellation updates no rows and never touches stock.
     @Transactional(timeout = TRANSACTION_TIMEOUT_SECONDS)
     public SaleResponse cancel(Long id, CancelSaleRequest request, Long userId) {
         // The seller never changes, so reading it without a lock is safe.
         Long sellerId = saleRepository.findSellerIdById(id).orElseThrow(SaleService::notFound);
-        cashDrawerService.lockForCancellation(sellerId, clock.instant());
+        Optional<CashDrawer> refundDrawer = cashDrawerService.lockForCancellation(sellerId, clock.instant());
         Instant cancelledAt = clock.instant().truncatedTo(ChronoUnit.MICROS);
         if (saleRepository.cancel(id, cancelledAt, userId, request.reason()) == 0) {
             throw new ConflictException("Sale is already cancelled");
         }
+        refundDrawer.ifPresent(drawer -> saleRepository.chargeCancellation(id, drawer.getId()));
         Sale sale = saleRepository.findDetailedById(id).orElseThrow(SaleService::notFound);
         sale.getItems().stream()
                 .sorted(Comparator.comparing(item -> item.getProduct().getId()))

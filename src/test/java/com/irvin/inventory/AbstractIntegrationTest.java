@@ -69,9 +69,15 @@ public abstract class AbstractIntegrationTest {
             return;
         }
         jdbcTemplate.update("""
-                UPDATE cash_drawer
-                SET closed_at = now(), closed_by = user_id, expected_cash = opening_float, counted_cash = opening_float
-                WHERE closed_at IS NULL AND user_id = (SELECT id FROM app_user WHERE email = ?)""", ADMIN_EMAIL);
+                WITH closed AS (
+                    UPDATE cash_drawer
+                    SET closed_at = now(), closed_by = responsible_id, expected_cash = opening_float,
+                        counted_cash = opening_float
+                    WHERE id IN (SELECT m.cash_drawer_id FROM cash_drawer_member m JOIN app_user u ON u.id = m.user_id
+                                 WHERE u.email = ? AND m.drawer_open)
+                    RETURNING id)
+                UPDATE cash_drawer_member SET drawer_open = false WHERE cash_drawer_id IN (SELECT id FROM closed)""",
+                ADMIN_EMAIL);
         openDrawer(adminAccessToken(), "0");
         ADMIN_DRAWER_DAY.set(today);
     }
@@ -82,6 +88,25 @@ public abstract class AbstractIntegrationTest {
                 {"openingFloat": %s}
                 """.formatted(openingFloat), accessToken)
                 .andExpect(status().isCreated()));
+    }
+
+    // A personal drawer of a past day, which the API can't open; closed with no difference if not open.
+    protected Long insertDrawer(Long userId, LocalDate businessDate, String openingFloat, boolean open) {
+        Long id = jdbcTemplate.queryForObject("""
+                INSERT INTO cash_drawer (responsible_id, opened_by, business_date, opening_float, opened_at)
+                VALUES (?, ?, ?, CAST(? AS numeric), now() - interval '1 day') RETURNING id""",
+                Long.class, userId, userId, businessDate, openingFloat);
+        if (!open) {
+            jdbcTemplate.update("""
+                    UPDATE cash_drawer
+                    SET closed_at = now() - interval '20 hours', closed_by = responsible_id,
+                        expected_cash = opening_float, counted_cash = opening_float
+                    WHERE id = ?""", id);
+        }
+        jdbcTemplate.update("""
+                INSERT INTO cash_drawer_member (cash_drawer_id, user_id, business_date, drawer_open)
+                VALUES (?, ?, ?, ?)""", id, userId, businessDate, open);
+        return id;
     }
 
     protected int stock(Long productId) {

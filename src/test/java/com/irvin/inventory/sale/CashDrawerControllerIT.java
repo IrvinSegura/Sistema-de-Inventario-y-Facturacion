@@ -38,7 +38,10 @@ class CashDrawerControllerIT extends AbstractIntegrationTest {
 
         Long drawerId = readId(postJson(CASH_DRAWERS, openBody("500"), token)
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.user.id").value(seller.id()))
+                .andExpect(jsonPath("$.responsible.id").value(seller.id()))
+                .andExpect(jsonPath("$.openedBy.id").value(seller.id()))
+                .andExpect(jsonPath("$.members.length()").value(1))
+                .andExpect(jsonPath("$.members[0].id").value(seller.id()))
                 .andExpect(jsonPath("$.businessDate").value(today().toString()))
                 .andExpect(jsonPath("$.openingFloat").value(500.0))
                 .andExpect(jsonPath("$.closing").doesNotExist()));
@@ -98,28 +101,55 @@ class CashDrawerControllerIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void drawerAndCashClosingApplyTheSameRuleAcrossDays() throws Exception {
+    void aDrawerCountsTheSalesRecordedInItAndTheRefundsThatCameOutOfIt() throws Exception {
         CreatedUser seller = createSeller();
-        String token = sellerToken(seller);
+        String token = loginOk(seller.email(), DEFAULT_PASSWORD).accessToken();
         String adminToken = adminAccessToken();
-        Long drawerId = readId(getJson(CASH_DRAWERS + "/current", token));
+        Long yesterdays = insertDrawer(seller.id(), today().minusDays(1), "0", false);
+        Long drawerId = openDrawer(token, "100");
         Long product = createPricedProduct("10.00", "0");
         addStock(product, 10);
-        sell(saleBody(product, 3, "CASH"), token).andExpect(status().isCreated());
-        // Rung up yesterday, cancelled today: the refund leaves today's drawer.
-        Long yesterdays = readId(sell(saleBody(product, 1, "CASH"), token).andExpect(status().isCreated()));
-        jdbcTemplate.update("UPDATE sale SET sale_date = sale_date - interval '1 day' WHERE id = ?", yesterdays);
-        cancel(yesterdays, adminToken);
-        // Rung up today, cancelled tomorrow: still in today's drawer.
-        Long tomorrows = readId(sell(saleBody(product, 2, "CASH"), token).andExpect(status().isCreated()));
-        cancel(tomorrows, adminToken);
-        jdbcTemplate.update("UPDATE sale SET cancelled_at = cancelled_at + interval '1 day' WHERE id = ?", tomorrows);
+        Long saleId = readId(sell(saleBody(product, 3, "CASH"), token).andExpect(status().isCreated()));
+        assertThat(jdbcTemplate.queryForObject("SELECT cash_drawer_id FROM sale WHERE id = ?", Long.class, saleId))
+                .isEqualTo(drawerId);
+        sell(saleBody(product, 2, "CARD"), token).andExpect(status().isCreated());
+        // Recorded in yesterday's drawer, cancelled today: the refund comes out of today's.
+        Long older = readId(sell(saleBody(product, 1, "CASH"), token).andExpect(status().isCreated()));
+        jdbcTemplate.update("UPDATE sale SET cash_drawer_id = ?, sale_date = sale_date - interval '1 day' WHERE id = ?",
+                yesterdays, older);
+        cancel(older, adminToken);
+        assertThat(jdbcTemplate.queryForObject("SELECT cancellation_drawer_id FROM sale WHERE id = ?", Long.class,
+                older)).isEqualTo(drawerId);
+        // Moving its cancellation to another day doesn't take the refund out of this drawer.
+        Long later = readId(sell(saleBody(product, 2, "CASH"), token).andExpect(status().isCreated()));
+        cancel(later, adminToken);
+        jdbcTemplate.update("UPDATE sale SET cancelled_at = cancelled_at + interval '1 day' WHERE id = ?", later);
 
-        // 30 + 20 - 10.
-        postJson(CASH_DRAWERS + "/" + drawerId + "/closing", closeBody("40", null), token)
-                .andExpect(jsonPath("$.closing.expectedCash").value(40.0));
-        getJson("/api/v1/sale-reports/cash-closing?sellerId=" + seller.id(), adminToken)
-                .andExpect(jsonPath("$.expectedCash").value(40.0));
+        // 100 + 30 + 20 - 10 - 20.
+        String drawerClosing = "/api/v1/sale-reports/cash-closing?drawerId=" + drawerId;
+        getJson(drawerClosing, adminToken)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cashDrawerId").value(drawerId))
+                .andExpect(jsonPath("$.date").value(today().toString()))
+                .andExpect(jsonPath("$.closed").value(false))
+                .andExpect(jsonPath("$.byPaymentMethod.CASH.saleCount").value(2))
+                .andExpect(jsonPath("$.byPaymentMethod.CASH.cancellationCount").value(2))
+                .andExpect(jsonPath("$.byPaymentMethod.CARD.net").value(20.0))
+                .andExpect(jsonPath("$.bySeller.length()").value(1))
+                .andExpect(jsonPath("$.bySeller[0].seller.id").value(seller.id()))
+                .andExpect(jsonPath("$.bySeller[0].cash.net").value(20.0))
+                .andExpect(jsonPath("$.bySeller[0].total.net").value(40.0))
+                .andExpect(jsonPath("$.expectedCash").value(120.0));
+        // Blind count, also for one drawer.
+        getJson(drawerClosing, token).andExpect(status().isConflict());
+        postJson(CASH_DRAWERS + "/" + drawerId + "/closing", closeBody("120", null), token)
+                .andExpect(jsonPath("$.closing.expectedCash").value(120.0));
+        getJson(drawerClosing, token)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.closed").value(true))
+                .andExpect(jsonPath("$.expectedCash").value(120.0));
+        // Another seller can't read it.
+        getJson(drawerClosing, sellerToken()).andExpect(status().isNotFound());
     }
 
     @Test
@@ -158,7 +188,7 @@ class CashDrawerControllerIT extends AbstractIntegrationTest {
         String body = getJson(CASH_DRAWERS + "?userId=" + seller.id(), otherToken)
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
-        assertThat(JsonPath.<List<Integer>>read(body, "$.content[*].user.id")).doesNotContain(seller.id().intValue());
+        assertThat(JsonPath.<List<Integer>>read(body, "$.content[*].responsible.id")).doesNotContain(seller.id().intValue());
 
         getJson(CASH_DRAWERS + "?userId=" + seller.id(), adminToken)
                 .andExpect(jsonPath("$.content.length()").value(1))
@@ -170,7 +200,7 @@ class CashDrawerControllerIT extends AbstractIntegrationTest {
         Long adminId = jdbcTemplate.queryForObject("SELECT id FROM app_user WHERE email = ?", Long.class, ADMIN_EMAIL);
         postJson(CASH_DRAWERS + "/" + drawerId + "/closing", closeBody("0", null), adminToken)
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.user.id").value(seller.id()))
+                .andExpect(jsonPath("$.responsible.id").value(seller.id()))
                 .andExpect(jsonPath("$.closing.closedBy.id").value(adminId))
                 .andExpect(jsonPath("$.closing.difference").value(0.0));
     }
@@ -182,10 +212,7 @@ class CashDrawerControllerIT extends AbstractIntegrationTest {
         Long product = createPricedProduct("10.00", "0");
         addStock(product, 1);
         LocalDate yesterday = today().minusDays(1);
-        Long oldDrawer = jdbcTemplate.queryForObject("""
-                INSERT INTO cash_drawer (user_id, business_date, opening_float, opened_at)
-                VALUES (?, ?, 200, now() - interval '1 day') RETURNING id""",
-                Long.class, seller.id(), yesterday);
+        Long oldDrawer = insertDrawer(seller.id(), yesterday, "200", true);
 
         postJson(CASH_DRAWERS, openBody("0"), token)
                 .andExpect(status().isConflict())

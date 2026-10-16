@@ -8,7 +8,10 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
+import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -16,15 +19,17 @@ import com.irvin.inventory.common.DateBounds;
 import com.irvin.inventory.common.exception.BadRequestException;
 import com.irvin.inventory.common.exception.ConflictException;
 import com.irvin.inventory.config.StoreProperties;
-import com.irvin.inventory.report.SaleReportRepository.PaymentMethodAmount;
+import com.irvin.inventory.report.SaleReportRepository.SellerPaymentAmount;
 import com.irvin.inventory.report.dto.CashClosingResponse;
 import com.irvin.inventory.report.dto.CashClosingResponse.Amounts;
+import com.irvin.inventory.report.dto.CashClosingResponse.SellerAmounts;
 import com.irvin.inventory.report.dto.SaleReportResponse;
 import com.irvin.inventory.report.dto.SaleReportResponse.DailyTotal;
 import com.irvin.inventory.report.dto.SaleReportResponse.Totals;
-import com.irvin.inventory.sale.CashDrawerRepository;
+import com.irvin.inventory.sale.CashDrawerService;
 import com.irvin.inventory.sale.PaymentMethod;
 import com.irvin.inventory.sale.dto.CashDrawerResponse;
+import com.irvin.inventory.sale.dto.SaleResponse.Ref;
 import com.irvin.inventory.sale.SaleService;
 import com.irvin.inventory.sale.SaleStatus;
 import com.irvin.inventory.security.CurrentUser;
@@ -48,15 +53,15 @@ public class SaleReportService {
     private static final Totals NO_SALES = new Totals(0, ZERO, ZERO, ZERO);
 
     private final SaleReportRepository saleReportRepository;
-    private final CashDrawerRepository cashDrawerRepository;
+    private final CashDrawerService cashDrawerService;
     private final StoreProperties storeProperties;
     private final Clock clock;
     private final TransactionTemplate snapshotTransaction;
 
-    public SaleReportService(SaleReportRepository saleReportRepository, CashDrawerRepository cashDrawerRepository,
+    public SaleReportService(SaleReportRepository saleReportRepository, CashDrawerService cashDrawerService,
             StoreProperties storeProperties, Clock clock, PlatformTransactionManager transactionManager) {
         this.saleReportRepository = saleReportRepository;
-        this.cashDrawerRepository = cashDrawerRepository;
+        this.cashDrawerService = cashDrawerService;
         this.storeProperties = storeProperties;
         this.clock = clock;
         // One snapshot for every query, so totals and breakdowns agree even while sales come in.
@@ -83,9 +88,12 @@ public class SaleReportService {
         return snapshotTransaction.execute(status -> buildSalesReport(from, to, zone, period));
     }
 
-    // date defaults to today in the store's time zone.
-    public CashClosingResponse cashClosing(LocalDate date, Long sellerId, CurrentUser viewer) {
+    // date defaults to today in the store's time zone; a drawer replaces both date and seller.
+    public CashClosingResponse cashClosing(LocalDate date, Long sellerId, Long drawerId, CurrentUser viewer) {
         ZoneId zone = storeProperties.timeZone();
+        if (drawerId != null) {
+            return snapshotTransaction.execute(status -> buildDrawerClosing(drawerId, zone, viewer));
+        }
         LocalDate day = date != null ? date : LocalDate.now(clock.withZone(zone));
         DateBounds.requireWithin(day);
         SaleReportRepository.Period period =
@@ -129,43 +137,68 @@ public class SaleReportService {
 
     private CashClosingResponse buildCashClosing(LocalDate day, ZoneId zone, boolean closed,
             SaleReportRepository.Period period, CurrentUser viewer) {
-        // Same snapshot: JPA reads run in the template's transaction.
-        List<CashDrawerResponse> drawers = (period.sellerId() == null
-                ? cashDrawerRepository.findByBusinessDateOrderByUserId(day)
-                : cashDrawerRepository.findByBusinessDateAndUserId(day, period.sellerId()))
-                .stream().map(CashDrawerResponse::from).toList();
+        // Same snapshot: the drawer reads join the template's transaction.
+        List<CashDrawerResponse> drawers = cashDrawerService.findByDay(day, period.sellerId());
         // Blind count: a seller who knew the expected cash could declare exactly that and pocket any
         // surplus. Hiding only the cash figures isn't enough, since they follow from the other ones.
         if (!viewer.isManager() && drawers.stream().anyMatch(drawer -> drawer.closing() == null)) {
-            throw new ConflictException("Close your cash drawer before viewing its cash closing");
+            throw blindCount();
         }
-        Map<PaymentMethod, PaymentMethodAmount> sales =
-                indexByPaymentMethod(saleReportRepository.salesByPaymentMethod(period));
-        Map<PaymentMethod, PaymentMethodAmount> cancellations =
-                indexByPaymentMethod(saleReportRepository.cancellationsByPaymentMethod(period));
+        return cashClosing(day, zone, period.sellerId(), null, closed, drawers,
+                saleReportRepository.salesBySeller(period), saleReportRepository.cancellationsBySeller(period));
+    }
+
+    // Sellers only get a drawer they're in (404 otherwise), once it is closed.
+    private CashClosingResponse buildDrawerClosing(Long drawerId, ZoneId zone, CurrentUser viewer) {
+        CashDrawerResponse drawer = cashDrawerService.findById(drawerId, viewer);
+        boolean closed = drawer.closing() != null;
+        if (!viewer.isManager() && !closed) {
+            throw blindCount();
+        }
+        return cashClosing(drawer.businessDate(), zone, null, drawerId, closed, List.of(drawer),
+                saleReportRepository.drawerSalesBySeller(drawerId),
+                saleReportRepository.drawerCancellationsBySeller(drawerId));
+    }
+
+    private static CashClosingResponse cashClosing(LocalDate day, ZoneId zone, Long sellerId, Long drawerId,
+            boolean closed, List<CashDrawerResponse> drawers, List<SellerPaymentAmount> sales,
+            List<SellerPaymentAmount> cancellations) {
+        Map<Long, Ref> sellers = new LinkedHashMap<>();
+        Map<Long, Map<PaymentMethod, Amounts>> bySellerAndMethod = new HashMap<>();
+        sales.forEach(sale -> add(sellers, bySellerAndMethod, sale,
+                Amounts.of(sale.count(), sale.total(), 0, ZERO)));
+        cancellations.forEach(cancellation -> add(sellers, bySellerAndMethod, cancellation,
+                Amounts.of(0, ZERO, cancellation.count(), cancellation.total())));
+
         // EnumMap: every payment method, serialized in declaration order.
         Map<PaymentMethod, Amounts> byPaymentMethod = new EnumMap<>(PaymentMethod.class);
         for (PaymentMethod method : PaymentMethod.values()) {
-            byPaymentMethod.put(method, toAmounts(sales.get(method), cancellations.get(method)));
+            byPaymentMethod.put(method, bySellerAndMethod.values().stream()
+                    .map(amounts -> amounts.getOrDefault(method, Amounts.NONE))
+                    .reduce(Amounts.NONE, Amounts::plus));
         }
         Amounts total = byPaymentMethod.values().stream().reduce(Amounts.NONE, Amounts::plus);
+        List<SellerAmounts> bySeller = sellers.values().stream()
+                .sorted(Comparator.comparing(Ref::name).thenComparing(Ref::id))
+                .map(seller -> {
+                    Map<PaymentMethod, Amounts> amounts = bySellerAndMethod.get(seller.id());
+                    return new SellerAmounts(seller, amounts.getOrDefault(PaymentMethod.CASH, Amounts.NONE),
+                            amounts.values().stream().reduce(Amounts.NONE, Amounts::plus));
+                })
+                .toList();
         BigDecimal openingFloat = drawers.stream().map(CashDrawerResponse::openingFloat).reduce(ZERO, BigDecimal::add);
-        return new CashClosingResponse(day, zone.getId(), period.sellerId(), closed, byPaymentMethod, total,
-                openingFloat, openingFloat.add(byPaymentMethod.get(PaymentMethod.CASH).net()), drawers);
+        return new CashClosingResponse(day, zone.getId(), sellerId, drawerId, closed, byPaymentMethod, total,
+                bySeller, openingFloat, openingFloat.add(byPaymentMethod.get(PaymentMethod.CASH).net()), drawers);
     }
 
-    // A missing amount means no movements with that payment method.
-    private static Amounts toAmounts(PaymentMethodAmount sales, PaymentMethodAmount cancellations) {
-        return Amounts.of(
-                sales == null ? 0 : sales.count(),
-                sales == null ? ZERO : sales.total(),
-                cancellations == null ? 0 : cancellations.count(),
-                cancellations == null ? ZERO : cancellations.total());
+    private static void add(Map<Long, Ref> sellers, Map<Long, Map<PaymentMethod, Amounts>> bySellerAndMethod,
+            SellerPaymentAmount row, Amounts amounts) {
+        sellers.putIfAbsent(row.sellerId(), new Ref(row.sellerId(), row.sellerName()));
+        bySellerAndMethod.computeIfAbsent(row.sellerId(), id -> new EnumMap<>(PaymentMethod.class))
+                .merge(row.paymentMethod(), amounts, Amounts::plus);
     }
 
-    private static Map<PaymentMethod, PaymentMethodAmount> indexByPaymentMethod(List<PaymentMethodAmount> amounts) {
-        Map<PaymentMethod, PaymentMethodAmount> map = new EnumMap<>(PaymentMethod.class);
-        amounts.forEach(amount -> map.put(amount.paymentMethod(), amount));
-        return map;
+    private static ConflictException blindCount() {
+        return new ConflictException("Close your cash drawer before viewing its cash closing");
     }
 }
