@@ -29,6 +29,12 @@ public final class Normalization {
         return trimmed == null ? null : trimmed.toLowerCase(Locale.ROOT);
     }
 
+    // Optional phone: blank becomes null, otherwise without spaces, dashes, dots or parentheses.
+    public static String optionalPhone(String phone) {
+        String trimmed = trimToNull(phone);
+        return trimmed == null ? null : trimmed.replaceAll("[\\s().-]", "");
+    }
+
     // Optional text: blank becomes null so "" and null mean the same.
     public static String trimToNull(String value) {
         if (value == null) {

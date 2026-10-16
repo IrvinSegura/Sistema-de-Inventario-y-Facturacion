@@ -38,7 +38,8 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@Import(TestcontainersConfiguration.class)
+@Import({TestcontainersConfiguration.class, TestPasswordResetConfiguration.class,
+        TestClientAddressConfiguration.class})
 public abstract class AbstractIntegrationTest {
 
     // Created on startup by AdminInitializer from application-test.yaml.

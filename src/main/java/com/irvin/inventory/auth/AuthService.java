@@ -119,8 +119,8 @@ public class AuthService {
                 tokenService.createAccessToken(user), jwtProperties.accessTokenTtl().toSeconds(), rawRefreshToken);
     }
 
-    // Only the SHA-256 is stored, so a DB leak doesn't expose usable tokens.
-    private static String hash(String rawToken) {
+    // Only the SHA-256 is stored, so a DB leak doesn't expose usable tokens (or reset codes).
+    static String hash(String rawToken) {
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(rawToken.getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(digest);

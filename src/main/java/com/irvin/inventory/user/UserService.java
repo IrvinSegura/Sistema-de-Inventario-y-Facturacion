@@ -41,6 +41,7 @@ public class UserService {
         user.setEmail(request.email());
         user.setPasswordHash(passwordEncoder.encode(request.password()));
         user.setRole(request.role());
+        user.setPhone(request.phone());
         return UserResponse.from(userRepository.save(user));
     }
 
@@ -70,6 +71,7 @@ public class UserService {
         boolean revokeSessions = user.getRole() != request.role() || (user.isActive() && !request.active());
         user.setName(request.name());
         user.setRole(request.role());
+        user.setPhone(request.phone());
         user.setActive(request.active());
         if (revokeSessions) {
             authService.revokeAllSessions(user.getId());

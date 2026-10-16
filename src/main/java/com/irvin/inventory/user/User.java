@@ -36,6 +36,10 @@ public class User {
     @Column(nullable = false)
     private String passwordHash;
 
+    // E.164; optional, needed to receive password reset codes by SMS.
+    @Column(length = 16)
+    private String phone;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private Role role;

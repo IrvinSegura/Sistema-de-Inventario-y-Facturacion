@@ -3,7 +3,10 @@ server:
   # Render injects PORT; 8080 elsewhere.
   port: ${PORT:8080}
   # Behind a TLS-terminating proxy: honor X-Forwarded-* so generated URLs (Swagger) use https.
-  forward-headers-strategy: framework
+  # Native (Tomcat RemoteIpValve), not framework: Render appends to X-Forwarded-For without clearing
+  # what the client sent, so the client address is the rightmost non-private entry, not the leftmost
+  # (which the rate limits would otherwise trust). Headers count only from private-network proxies.
+  forward-headers-strategy: native
 
 spring:
   datasource:
@@ -16,6 +19,9 @@ app:
   cors:
     # The deployed web client(s); none until it is set.
     allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+  password-reset:
+    # Reset codes are secrets: never in production logs.
+    log-codes: false
 
 # Public on purpose: the API docs are part of the portfolio demo (endpoints still require a token).
 springdoc:

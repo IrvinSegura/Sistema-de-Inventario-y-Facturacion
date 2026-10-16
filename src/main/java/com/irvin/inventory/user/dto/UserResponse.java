@@ -5,10 +5,11 @@ import java.time.Instant;
 import com.irvin.inventory.user.Role;
 import com.irvin.inventory.user.User;
 
-public record UserResponse(Long id, String name, String email, Role role, boolean active, Instant createdAt) {
+public record UserResponse(
+        Long id, String name, String email, String phone, Role role, boolean active, Instant createdAt) {
 
     public static UserResponse from(User user) {
-        return new UserResponse(
-                user.getId(), user.getName(), user.getEmail(), user.getRole(), user.isActive(), user.getCreatedAt());
+        return new UserResponse(user.getId(), user.getName(), user.getEmail(), user.getPhone(), user.getRole(),
+                user.isActive(), user.getCreatedAt());
     }
 }
