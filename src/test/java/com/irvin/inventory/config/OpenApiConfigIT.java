@@ -16,7 +16,9 @@ class OpenApiConfigIT extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.components.securitySchemes.bearerAuth.scheme").value("bearer"))
                 .andExpect(jsonPath("$.paths['/api/v1/users'].get").exists())
                 // Login is public: it overrides the global bearer requirement with an empty one.
-                .andExpect(jsonPath("$.paths['/api/v1/auth/login'].post.security").isEmpty());
+                .andExpect(jsonPath("$.paths['/api/v1/auth/login'].post.security").isEmpty())
+                .andExpect(jsonPath("$.paths['/api/v1/auth/password-reset/code'].post.security").isEmpty())
+                .andExpect(jsonPath("$.paths['/api/v1/auth/password-reset'].post.security").isEmpty());
     }
 
     // Nested records share simple names ("Item"); without explicit names springdoc merges them and

@@ -36,7 +36,7 @@ public class AdminInitializer implements ApplicationRunner {
         }
 
         CreateUserRequest request = new CreateUserRequest(
-                adminProperties.name(), adminProperties.email(), adminProperties.password(), Role.ADMIN);
+                adminProperties.name(), adminProperties.email(), adminProperties.password(), Role.ADMIN, null);
         Set<ConstraintViolation<CreateUserRequest>> violations = validator.validate(request);
         if (!violations.isEmpty()) {
             String details = violations.stream()

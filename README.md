@@ -58,6 +58,9 @@ docker run -p 8080:8080 -e SPRING_PROFILES_ACTIVE=prod -e DB_HOST=... -e DB_NAME
 On the free plan the service sleeps after a few idle minutes (the first request takes about a minute)
 and the free database expires after a limited time; Flyway recreates the schema on a new one.
 
+Login and password reset are rate limited per client address in memory (`app.rate-limit`), so run a
+single instance; scaling out needs a shared store for the limits.
+
 ## Tests
 
 ```bash
@@ -74,3 +77,7 @@ and the free database expires after a limited time; Flyway recreates the schema 
 | `PORT` | HTTP port (`prod`; defaults to 8080, Render sets it) |
 | `JWT_SECRET` | Base64, at least 32 bytes (`openssl rand -base64 32`) |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Initial admin, created if none exists |
+| `MAIL_HOST` / `MAIL_PORT` / `MAIL_USERNAME` / `MAIL_PASSWORD` / `MAIL_FROM` | SMTP for password reset codes by email (optional; port defaults to 587 with STARTTLS) |
+| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` | Twilio for password reset codes by SMS (optional; number in E.164) |
+
+Without SMTP or Twilio settings, reset codes for that channel aren't sent; outside `prod` they are written to the log so the flow can be tried locally.
