@@ -1,10 +1,12 @@
 package com.irvin.inventory.catalog;
 
+import java.util.Map;
 import java.util.Objects;
 
 import com.irvin.inventory.catalog.dto.CreateProductRequest;
 import com.irvin.inventory.catalog.dto.ProductResponse;
 import com.irvin.inventory.catalog.dto.UpdateProductRequest;
+import com.irvin.inventory.common.Sorting;
 import com.irvin.inventory.common.exception.BadRequestException;
 import com.irvin.inventory.common.exception.ConflictException;
 import com.irvin.inventory.common.exception.NotFoundException;
@@ -12,7 +14,6 @@ import com.irvin.inventory.common.storage.ImageStorage;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -25,6 +26,15 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 public class ProductService {
 
     private static final Sort DEFAULT_SORT = Sort.by("name", "id");
+    // Orders a client may ask for (API name -> entity path); the default one breaks ties.
+    private static final Map<String, String> SORTABLE = Map.of(
+            "name", "name",
+            "sku", "sku",
+            "category", "category.name",
+            "salePrice", "salePrice",
+            "stock", "stock",
+            "minStock", "minStock",
+            "createdAt", "createdAt");
     static final String IN_USE_MESSAGE = "Product has stock movements; deactivate it instead";
 
     private final ProductRepository productRepository;
@@ -33,7 +43,7 @@ public class ProductService {
 
     @Transactional(readOnly = true)
     public Page<ProductResponse> search(ProductSearch search, Pageable pageable) {
-        Pageable sorted = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), DEFAULT_SORT);
+        Pageable sorted = Sorting.apply(pageable, SORTABLE, DEFAULT_SORT);
         return productRepository.findAll(search.toSpecification(), sorted).map(ProductResponse::from);
     }
 
