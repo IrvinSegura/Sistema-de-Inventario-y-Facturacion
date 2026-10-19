@@ -1,8 +1,10 @@
 package com.irvin.inventory.user;
 
 import java.util.List;
+import java.util.Map;
 
 import com.irvin.inventory.auth.AuthService;
+import com.irvin.inventory.common.Sorting;
 import com.irvin.inventory.common.exception.BadRequestException;
 import com.irvin.inventory.common.exception.ConflictException;
 import com.irvin.inventory.common.exception.NotFoundException;
@@ -12,7 +14,6 @@ import com.irvin.inventory.user.dto.UpdateUserRequest;
 import com.irvin.inventory.user.dto.UserResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -24,8 +25,14 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class UserService {
 
-    // Fixed sort: client-chosen sort fields could order by sensitive columns.
+    // Only the SORTABLE fields can be sorted by: anything else could order by sensitive columns.
     private static final Sort DEFAULT_SORT = Sort.by("name", "id");
+    // Orders a client may ask for (API name -> entity path); the default one breaks ties.
+    private static final Map<String, String> SORTABLE = Map.of(
+            "name", "name",
+            "email", "email",
+            "role", "role",
+            "createdAt", "createdAt");
 
     private final UserRepository userRepository;
     private final AuthService authService;
@@ -47,7 +54,7 @@ public class UserService {
 
     @Transactional(readOnly = true)
     public Page<UserResponse> findAll(Pageable pageable) {
-        Pageable sorted = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), DEFAULT_SORT);
+        Pageable sorted = Sorting.apply(pageable, SORTABLE, DEFAULT_SORT);
         return userRepository.findAll(sorted).map(UserResponse::from);
     }
 

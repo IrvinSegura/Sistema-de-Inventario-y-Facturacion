@@ -15,6 +15,7 @@ import java.util.stream.Collectors;
 import com.irvin.inventory.catalog.Product;
 import com.irvin.inventory.catalog.ProductRepository;
 import com.irvin.inventory.common.IdempotencyLock;
+import com.irvin.inventory.common.Sorting;
 import com.irvin.inventory.common.exception.BadRequestException;
 import com.irvin.inventory.common.exception.ConflictException;
 import com.irvin.inventory.common.exception.ForbiddenException;
@@ -30,7 +31,6 @@ import com.irvin.inventory.stock.InventoryMovementRepository;
 import com.irvin.inventory.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -44,6 +44,15 @@ public class SaleService {
 
     private static final String IDEMPOTENCY_SCOPE = "sale";
     private static final Sort DEFAULT_SORT = Sort.by(Sort.Direction.DESC, "saleDate", "id");
+    // Orders a client may ask for (API name -> entity path); the default one breaks ties.
+    private static final Map<String, String> SORTABLE = Map.of(
+            "saleNumber", "saleNumber",
+            "saleDate", "saleDate",
+            "total", "total",
+            "paymentMethod", "paymentMethod",
+            "status", "status",
+            "customer", "customer.name",
+            "seller", "user.name");
     // Largest value of NUMERIC(12,2).
     private static final BigDecimal MAX_TOTAL = new BigDecimal("9999999999.99");
     private static final int MONEY_SCALE = 2;
@@ -151,7 +160,7 @@ public class SaleService {
     @Transactional(readOnly = true)
     public Page<SaleSummaryResponse> search(SaleSearch search, Pageable pageable, CurrentUser viewer) {
         SaleSearch scoped = viewer.isManager() ? search : search.withSeller(viewer.id());
-        Pageable sorted = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), DEFAULT_SORT);
+        Pageable sorted = Sorting.apply(pageable, SORTABLE, DEFAULT_SORT);
         return saleRepository.findAll(scoped.toSpecification(), sorted).map(SaleSummaryResponse::from);
     }
 

@@ -58,7 +58,9 @@ public class SaleController {
         return ResponseEntity.created(URI.create("/api/v1/sales/" + result.sale().id())).body(result.sale());
     }
 
-    @Operation(summary = "List sales, newest first", description = "Sellers only get their own sales.")
+    @Operation(summary = "List sales, newest first unless sorted",
+            description = "Sellers only get their own sales. Sort by saleNumber, saleDate, total, paymentMethod, "
+                    + "status, customer or seller.")
     @GetMapping
     public Page<SaleSummaryResponse> search(
             @RequestParam(required = false) Long saleNumber,
