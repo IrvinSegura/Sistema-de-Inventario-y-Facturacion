@@ -22,4 +22,12 @@ public interface CustomerRepository extends JpaRepository<Customer, Long>, JpaSp
     @Lock(LockModeType.PESSIMISTIC_READ)
     @Query("select c from Customer c where c.taxId = :taxId")
     Optional<Customer> findByTaxIdForShare(String taxId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select c from Customer c where c.id = :id")
+    Optional<Customer> findByIdForUpdate(Long id);
+
+    // Sales keep their customer, so one with sales can only be deactivated.
+    @Query(value = "SELECT EXISTS (SELECT 1 FROM sale WHERE customer_id = :customerId)", nativeQuery = true)
+    boolean hasSales(Long customerId);
 }

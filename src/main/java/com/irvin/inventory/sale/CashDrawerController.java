@@ -79,7 +79,9 @@ public class CashDrawerController {
         return cashDrawerService.findCurrent(CurrentUser.from(jwt).id());
     }
 
-    @Operation(summary = "List cash drawers, newest day first", description = "Sellers only get the ones they're in.")
+    @Operation(summary = "List cash drawers, newest day first unless sorted",
+            description = "Sellers only get the ones they're in. Sort by businessDate, openingFloat, expectedCash, "
+                    + "countedCash, openedAt or closedAt.")
     @GetMapping
     public Page<CashDrawerResponse> search(
             @Parameter(description = "Drawers this seller is in; ignored for sellers")

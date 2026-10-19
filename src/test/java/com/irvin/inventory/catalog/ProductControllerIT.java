@@ -166,6 +166,31 @@ class ProductControllerIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void searchSortsByAllowedFieldsOnly() throws Exception {
+        String token = adminAccessToken();
+        String tag = "Sort" + UUID.randomUUID().toString().substring(0, 8);
+        Long snacks = categoryId("Snacks");
+        Long few = createProduct(tag + " a", snacks, 5);
+        Long many = createProduct(tag + " b", snacks, 5);
+        Long some = createProduct(tag + " c", snacks, 5);
+        setStock(few, 1);
+        setStock(many, 90);
+        setStock(some, 40);
+
+        getJson("/api/v1/products?search=" + tag + "&sort=stock,desc", token)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].id").value(many))
+                .andExpect(jsonPath("$.content[1].id").value(some))
+                .andExpect(jsonPath("$.content[2].id").value(few));
+        getJson("/api/v1/products?search=" + tag + "&sort=name,desc", token)
+                .andExpect(jsonPath("$.content[0].id").value(some));
+        // Only listed fields: nothing else (e.g. internal columns) can drive the order.
+        getJson("/api/v1/products?search=" + tag + "&sort=version", token)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.startsWith("Unknown sort property: version")));
+    }
+
+    @Test
     void searchFindsInactiveProductsByExactBarcode() throws Exception {
         String token = adminAccessToken();
         String barcode = randomBarcode();

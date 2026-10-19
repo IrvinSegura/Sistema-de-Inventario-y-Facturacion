@@ -1,7 +1,10 @@
 package com.irvin.inventory.customer;
 
+import java.util.Map;
 import java.util.Objects;
 
+import com.irvin.inventory.common.Sorting;
+import com.irvin.inventory.common.exception.BadRequestException;
 import com.irvin.inventory.common.exception.ConflictException;
 import com.irvin.inventory.common.exception.ForbiddenException;
 import com.irvin.inventory.common.exception.NotFoundException;
@@ -11,7 +14,6 @@ import com.irvin.inventory.customer.dto.UpdateCustomerRequest;
 import com.irvin.inventory.security.CurrentUser;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -22,12 +24,26 @@ import org.springframework.transaction.annotation.Transactional;
 public class CustomerService {
 
     private static final Sort DEFAULT_SORT = Sort.by("name", "id");
+    // Orders a client may ask for (API name -> entity path); the default one breaks ties.
+    private static final Map<String, String> SORTABLE = Map.of(
+            "name", "name",
+            "taxId", "taxId",
+            "email", "email",
+            "phone", "phone",
+            "createdAt", "createdAt");
+    static final String IN_USE_MESSAGE = "Customer has sales; deactivate it instead";
+    static final String INCOMPLETE_FISCAL_DATA_MESSAGE =
+            "Tax ID, fiscal postal code and tax regime must be given together";
+    static final String UNKNOWN_TAX_REGIME_MESSAGE = "Unknown tax regime";
+    static final String COMPANY_TAX_REGIME_MESSAGE = "The tax regime doesn't apply to a company (12-character tax ID)";
+    static final String INDIVIDUAL_TAX_REGIME_MESSAGE =
+            "The tax regime doesn't apply to an individual (13-character tax ID)";
 
     private final CustomerRepository customerRepository;
 
     @Transactional(readOnly = true)
     public Page<CustomerResponse> search(CustomerSearch search, Pageable pageable) {
-        Pageable sorted = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), DEFAULT_SORT);
+        Pageable sorted = Sorting.apply(pageable, SORTABLE, DEFAULT_SORT);
         return customerRepository.findAll(search.toSpecification(), sorted).map(CustomerResponse::from);
     }
 
@@ -38,6 +54,7 @@ public class CustomerService {
 
     @Transactional
     public CustomerResponse create(CreateCustomerRequest request) {
+        requireFiscalData(request.taxId(), request.fiscalPostalCode(), request.taxRegime());
         if (request.taxId() != null && customerRepository.existsByTaxId(request.taxId())) {
             throw duplicateTaxId();
         }
@@ -47,6 +64,8 @@ public class CustomerService {
         customer.setEmail(request.email());
         customer.setPhone(request.phone());
         customer.setAddress(request.address());
+        customer.setFiscalPostalCode(request.fiscalPostalCode());
+        customer.setTaxRegime(request.taxRegime());
         return CustomerResponse.from(customerRepository.save(customer));
     }
 
@@ -58,6 +77,7 @@ public class CustomerService {
         if (customer.isWalkIn()) {
             throw new ConflictException("The walk-in customer can't be modified");
         }
+        requireFiscalData(request.taxId(), request.fiscalPostalCode(), request.taxRegime());
         if (!customer.getVersion().equals(request.version())) {
             throw ConflictException.staleVersion();
         }
@@ -75,9 +95,41 @@ public class CustomerService {
         customer.setEmail(request.email());
         customer.setPhone(request.phone());
         customer.setAddress(request.address());
+        customer.setFiscalPostalCode(request.fiscalPostalCode());
+        customer.setTaxRegime(request.taxRegime());
         customer.setActive(request.active());
         // Flush so the response carries the incremented version.
         return CustomerResponse.from(customerRepository.saveAndFlush(customer));
+    }
+
+    @Transactional
+    public void delete(Long id) {
+        // Locked first so a checkout can't record a sale for it between the check and the delete.
+        Customer customer = customerRepository.findByIdForUpdate(id).orElseThrow(CustomerService::notFound);
+        if (customer.isWalkIn()) {
+            throw new ConflictException("The walk-in customer can't be deleted");
+        }
+        if (customerRepository.hasSales(id)) {
+            throw new ConflictException(IN_USE_MESSAGE);
+        }
+        customerRepository.delete(customer);
+        customerRepository.flush();
+    }
+
+    // An invoice (CFDI 4.0) needs all three, so a customer has the complete set or none of it.
+    private static void requireFiscalData(String taxId, String fiscalPostalCode, String taxRegime) {
+        if (taxId == null && fiscalPostalCode == null && taxRegime == null) {
+            return;
+        }
+        if (taxId == null || fiscalPostalCode == null || taxRegime == null) {
+            throw new BadRequestException(INCOMPLETE_FISCAL_DATA_MESSAGE);
+        }
+        TaxRegime regime = TaxRegime.fromCode(taxRegime)
+                .orElseThrow(() -> new BadRequestException(UNKNOWN_TAX_REGIME_MESSAGE));
+        if (!regime.appliesTo(taxId)) {
+            throw new BadRequestException(TaxRegime.isCompanyTaxId(taxId)
+                    ? COMPANY_TAX_REGIME_MESSAGE : INDIVIDUAL_TAX_REGIME_MESSAGE);
+        }
     }
 
     private static NotFoundException notFound() {

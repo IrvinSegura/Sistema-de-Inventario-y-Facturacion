@@ -34,7 +34,8 @@ public class SupplierController {
 
     private final SupplierService supplierService;
 
-    @Operation(summary = "Search suppliers sorted by name")
+    @Operation(summary = "Search suppliers, by name unless sorted",
+            description = "Sort by name, taxId, email, phone or createdAt.")
     @GetMapping
     public Page<SupplierResponse> search(
             @Parameter(description = "Matches name or tax ID") @RequestParam(required = false) String search,
