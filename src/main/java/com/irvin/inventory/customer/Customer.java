@@ -42,6 +42,14 @@ public class Customer {
 
     private String address;
 
+    // CFDI 4.0 receiver data, set together with the tax ID (CustomerService); null for the walk-in customer.
+    @Column(length = 5)
+    private String fiscalPostalCode;
+
+    // c_RegimenFiscal code (TaxRegime).
+    @Column(length = 3)
+    private String taxRegime;
+
     @Column(nullable = false)
     private boolean active = true;
 
