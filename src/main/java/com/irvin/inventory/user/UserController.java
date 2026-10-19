@@ -1,5 +1,6 @@
 package com.irvin.inventory.user;
 
+import com.irvin.inventory.security.Roles;
 import java.net.URI;
 
 import com.irvin.inventory.user.dto.CreateUserRequest;
@@ -25,7 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(name = "Users", description = "User management (ADMIN only)")
 @RestController
 @RequestMapping("/api/v1/users")
-@PreAuthorize("hasRole('ADMIN')")
+@PreAuthorize(Roles.ADMIN)
 @RequiredArgsConstructor
 public class UserController {
 

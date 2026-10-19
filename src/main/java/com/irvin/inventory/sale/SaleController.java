@@ -9,6 +9,7 @@ import com.irvin.inventory.sale.dto.CreateSaleRequest;
 import com.irvin.inventory.sale.dto.SaleResponse;
 import com.irvin.inventory.sale.dto.SaleSummaryResponse;
 import com.irvin.inventory.security.CurrentUser;
+import com.irvin.inventory.security.Roles;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -31,7 +32,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-@Tag(name = "Sales", description = "Record and view: any user (sellers only see their own). Cancel: ADMIN only")
+@Tag(name = "Sales", description = "Record and view: any user (sellers only see their own). Cancel: ADMIN or SUPERVISOR")
 @RestController
 @RequestMapping("/api/v1/sales")
 @RequiredArgsConstructor
@@ -42,14 +43,15 @@ public class SaleController {
     @Operation(summary = "Record a sale and decrease stock",
             description = "Prices and VAT come from the products and totals are computed by the server. "
                     + "Without customerId the sale goes to the walk-in customer. A repeated Idempotency-Key "
-                    + "returns the original sale (200) instead of charging twice. Not enough stock: 409.")
+                    + "returns the original sale (200) instead of charging twice. Not enough stock: 409. "
+                    + "Only sellers sell, from their open drawer: 403 for managers.")
     @PostMapping
     public ResponseEntity<SaleResponse> create(
             @Valid @RequestBody CreateSaleRequest request,
             @Parameter(description = "UUID generated once per checkout; reuse it when retrying")
             @RequestHeader(name = "Idempotency-Key") UUID idempotencyKey,
             @AuthenticationPrincipal Jwt jwt) {
-        SaleService.CreateResult result = saleService.create(request, idempotencyKey, CurrentUser.from(jwt).id());
+        SaleService.CreateResult result = saleService.create(request, idempotencyKey, CurrentUser.from(jwt));
         if (!result.created()) {
             return ResponseEntity.ok(result.sale());
         }
@@ -62,6 +64,8 @@ public class SaleController {
             @RequestParam(required = false) Long saleNumber,
             @RequestParam(required = false) Long customerId,
             @Parameter(description = "Ignored for sellers") @RequestParam(required = false) Long sellerId,
+            @Parameter(description = "Sales recorded in this cash drawer; sellers still get only their own")
+            @RequestParam(required = false) Long cashDrawerId,
             @RequestParam(required = false) SaleStatus status,
             @Parameter(description = "Inclusive, ISO-8601 instant")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
@@ -69,8 +73,8 @@ public class SaleController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
             @ParameterObject Pageable pageable,
             @AuthenticationPrincipal Jwt jwt) {
-        return saleService.search(new SaleSearch(saleNumber, customerId, sellerId, status, from, to), pageable,
-                CurrentUser.from(jwt));
+        return saleService.search(new SaleSearch(saleNumber, customerId, sellerId, cashDrawerId, status, from, to),
+                pageable, CurrentUser.from(jwt));
     }
 
     @Operation(summary = "Get a sale with its items")
@@ -81,7 +85,7 @@ public class SaleController {
 
     @Operation(summary = "Cancel a sale and return its stock",
             description = "A reason is required. Cancelling an already cancelled sale returns 409.")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize(Roles.MANAGERS)
     @PostMapping("/{id}/cancellation")
     public SaleResponse cancel(
             @PathVariable Long id,

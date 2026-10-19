@@ -46,4 +46,13 @@ public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpec
     boolean existsByBarcodeAndIdNot(String barcode, Long id);
 
     boolean existsByCategoryIdAndActiveTrue(Long categoryId);
+
+    // Case-insensitive, like the uk_product_name index (V12) that backs it.
+    boolean existsByNameIgnoreCase(String name);
+
+    boolean existsByNameIgnoreCaseAndIdNot(String name, Long id);
+
+    // Every purchase, sale and adjustment writes a movement, so none means the product was never used.
+    @Query(value = "SELECT EXISTS (SELECT 1 FROM inventory_movement WHERE product_id = :productId)", nativeQuery = true)
+    boolean hasMovements(Long productId);
 }

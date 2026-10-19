@@ -1,5 +1,6 @@
 package com.irvin.inventory.catalog;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -165,6 +166,24 @@ class ProductControllerIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void searchFindsInactiveProductsByExactBarcode() throws Exception {
+        String token = adminAccessToken();
+        String barcode = randomBarcode();
+        String sku = uniqueSku();
+        Long pantry = categoryId("Pantry");
+        Long id = readId(postJson("/api/v1/products", productBody(sku, barcode, "Scanned " + sku, pantry, null), token)
+                .andExpect(status().isCreated()));
+        putJson("/api/v1/products/" + id, updateBody(sku, barcode, pantry, false, 0), token).andExpect(status().isOk());
+
+        getJson("/api/v1/products?active=false&search=" + barcode, token)
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].id").value(id));
+        // Part of a barcode doesn't match.
+        getJson("/api/v1/products?active=false&search=" + barcode.substring(0, 8), token)
+                .andExpect(jsonPath("$.content.length()").value(0));
+    }
+
+    @Test
     void searchMatchesLikeWildcardsLiterally() throws Exception {
         String token = adminAccessToken();
         String tag = "Pct" + UUID.randomUUID().toString().substring(0, 8);
@@ -218,6 +237,61 @@ class ProductControllerIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void namesAreUniqueIgnoringCase() throws Exception {
+        String token = adminAccessToken();
+        Long pantry = categoryId("Pantry");
+        String name = "Tag" + UUID.randomUUID().toString().substring(0, 8) + " Agua 1L";
+        postJson("/api/v1/products", productBody(uniqueSku(), null, name, pantry, null), token)
+                .andExpect(status().isCreated());
+        Long other = createProduct(pantry, 0);
+
+        postJson("/api/v1/products", productBody(uniqueSku(), null, name.toUpperCase(), pantry, null), token)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail").value("Name already exists"));
+        putJson("/api/v1/products/" + other, """
+                {"sku": "%s", "name": "%s", "categoryId": %d, "salePrice": 1, "taxRate": 0, "minStock": 0,
+                 "active": true, "version": 0}
+                """.formatted(uniqueSku(), name.toLowerCase(), pantry), token)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail").value("Name already exists"));
+    }
+
+    @Test
+    void skuAndNameRejectCharactersOutsideTheirRules() throws Exception {
+        String token = adminAccessToken();
+        Long pantry = categoryId("Pantry");
+
+        postJson("/api/v1/products", productBody("SKU 1!", null, "<b>Bold</b>", pantry, null), token)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.sku").exists())
+                .andExpect(jsonPath("$.errors.name").exists());
+        // Accents, digits and common punctuation are fine; the SKU is uppercased before the check.
+        postJson("/api/v1/products", productBody("ab-" + UUID.randomUUID().toString().substring(0, 6), null,
+                "Jabón Zote 400 g (2 pzs) " + UUID.randomUUID().toString().substring(0, 6), pantry, null), token)
+                .andExpect(status().isCreated());
+    }
+
+    @Test
+    void onlyProductsWithoutMovementsCanBeDeleted() throws Exception {
+        String token = adminAccessToken();
+        Long pantry = categoryId("Pantry");
+        Long unused = createProduct(pantry, 0);
+        Long adjusted = createProduct(pantry, 0);
+        postJson("/api/v1/stock-adjustments", """
+                {"productId": %d, "quantity": 3, "reason": "Initial stock"}
+                """.formatted(adjusted), token)
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(withToken(delete("/api/v1/products/{id}", unused), token)).andExpect(status().isNoContent());
+        getJson("/api/v1/products/" + unused, token).andExpect(status().isNotFound());
+        mockMvc.perform(withToken(delete("/api/v1/products/{id}", adjusted), token))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail").value(ProductService.IN_USE_MESSAGE));
+        mockMvc.perform(withToken(delete("/api/v1/products/{id}", 999_999_999L), token)).andExpect(status().isNotFound());
+        mockMvc.perform(withToken(delete("/api/v1/products/{id}", adjusted), sellerToken())).andExpect(status().isForbidden());
+    }
+
+    @Test
     void productsRequireAuthentication() throws Exception {
         mockMvc.perform(get("/api/v1/products")).andExpect(status().isUnauthorized());
     }
@@ -253,10 +327,11 @@ class ProductControllerIT extends AbstractIntegrationTest {
     }
 
     private static String updateBody(String sku, String barcode, Long categoryId, boolean active, long version) {
+        // Named after the SKU: names are unique, and each update sends a fresh SKU.
         return """
-                {"sku": "%s", "barcode": %s, "name": "Updated", "categoryId": %d, "salePrice": 12.50,
+                {"sku": "%s", "barcode": %s, "name": "Updated %s", "categoryId": %d, "salePrice": 12.50,
                  "taxRate": 0, "minStock": 0, "active": %s, "version": %d}
-                """.formatted(sku, jsonString(barcode), categoryId, active, version);
+                """.formatted(sku, jsonString(barcode), sku, categoryId, active, version);
     }
 
     private static String jsonString(String value) {

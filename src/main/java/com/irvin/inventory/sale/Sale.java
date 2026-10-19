@@ -56,6 +56,11 @@ public class Sale {
     @JoinColumn(name = "user_id")
     private User user;
 
+    // The drawer its cash went into; null only for sales made before drawers existed.
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "cash_drawer_id")
+    private CashDrawer cashDrawer;
+
     @Column(nullable = false)
     private Instant saleDate;
 
@@ -90,6 +95,12 @@ public class Sale {
     @Setter(AccessLevel.NONE)
     @Column(updatable = false)
     private String cancellationReason;
+
+    // The drawer the refund came out of; null if the seller had no open drawer when it was cancelled.
+    @Setter(AccessLevel.NONE)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "cancellation_drawer_id", updatable = false)
+    private CashDrawer cancellationDrawer;
 
     @Column(nullable = false)
     private UUID idempotencyKey;

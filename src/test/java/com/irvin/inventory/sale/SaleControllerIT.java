@@ -73,13 +73,13 @@ class SaleControllerIT extends AbstractIntegrationTest {
         String adminToken = adminAccessToken();
         Long product = createPricedProduct("10.00", "0.16");
         addStock(product, 1);
-        Long saleId = readId(sell(saleBody(product, 1), adminToken).andExpect(status().isCreated()));
+        Long saleId = readId(sell(saleBody(product, 1), sellerToken()).andExpect(status().isCreated()));
         String sku = jdbcTemplate.queryForObject("SELECT sku FROM product WHERE id = ?", String.class, product);
 
         putJson("/api/v1/products/" + product, """
-                {"sku": "%s", "name": "Repriced", "categoryId": %d, "salePrice": 99, "taxRate": 0,
+                {"sku": "%s", "name": "Repriced %s", "categoryId": %d, "salePrice": 99, "taxRate": 0,
                  "minStock": 0, "active": true, "version": 0}
-                """.formatted(sku, categoryId("Pantry")), adminToken).andExpect(status().isOk());
+                """.formatted(sku, sku, categoryId("Pantry")), adminToken).andExpect(status().isOk());
 
         getJson("/api/v1/sales/" + saleId, adminToken)
                 .andExpect(jsonPath("$.items[0].unitPrice").value(10.0))
@@ -258,6 +258,7 @@ class SaleControllerIT extends AbstractIntegrationTest {
     @Test
     void salesPurchasesAndCancellationsOnTheSameProductsDoNotDeadlock() throws Exception {
         String adminToken = adminAccessToken();
+        String sellerToken = sellerToken();
         Long a = createPricedProduct("1", "0");
         Long b = createPricedProduct("1", "0");
         addStock(a, 20);
@@ -266,7 +267,7 @@ class SaleControllerIT extends AbstractIntegrationTest {
         int each = 4;
         List<Long> toCancel = new ArrayList<>();
         for (int i = 0; i < each; i++) {
-            toCancel.add(readId(sell(twoItemBody(a, b), adminToken).andExpect(status().isCreated())));
+            toCancel.add(readId(sell(twoItemBody(a, b), sellerToken).andExpect(status().isCreated())));
         }
         String saleAb = twoItemBody(a, b);
         String purchaseBa = """
@@ -281,7 +282,7 @@ class SaleControllerIT extends AbstractIntegrationTest {
         for (int i = 0; i < each; i++) {
             UUID key = UUID.randomUUID();
             Long saleId = toCancel.get(i);
-            tasks.add(() -> httpStatus(postJson("/api/v1/sales", saleAb, adminToken, key)));
+            tasks.add(() -> httpStatus(postJson("/api/v1/sales", saleAb, sellerToken, key)));
             tasks.add(() -> httpStatus(postJson("/api/v1/purchases", purchaseBa, adminToken)));
             tasks.add(() -> httpStatus(
                     postJson("/api/v1/sales/" + saleId + "/cancellation", cancellation, adminToken)));
@@ -404,15 +405,16 @@ class SaleControllerIT extends AbstractIntegrationTest {
     @Test
     void retryAfterCancellationReturnsTheCancelledSale() throws Exception {
         String adminToken = adminAccessToken();
+        String sellerToken = sellerToken();
         Long product = createPricedProduct("1", "0");
         addStock(product, 1);
         UUID key = UUID.randomUUID();
-        Long saleId = readId(postJson("/api/v1/sales", saleBody(product, 1), adminToken, key)
+        Long saleId = readId(postJson("/api/v1/sales", saleBody(product, 1), sellerToken, key)
                 .andExpect(status().isCreated()));
         postJson("/api/v1/sales/" + saleId + "/cancellation", cancelBody("Voided"), adminToken)
                 .andExpect(status().isOk());
 
-        postJson("/api/v1/sales", saleBody(product, 1), adminToken, key)
+        postJson("/api/v1/sales", saleBody(product, 1), sellerToken, key)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(saleId))
                 .andExpect(jsonPath("$.status").value("CANCELLED"));
@@ -458,7 +460,7 @@ class SaleControllerIT extends AbstractIntegrationTest {
         String adminToken = adminAccessToken();
         Long product = createPricedProduct("1", "0");
         addStock(product, 4);
-        Long saleId = readId(sell(saleBody(product, 4), adminToken).andExpect(status().isCreated()));
+        Long saleId = readId(sell(saleBody(product, 4), sellerToken()).andExpect(status().isCreated()));
         String body = cancelBody("Duplicate charge");
         int attempts = 6;
 
@@ -475,7 +477,7 @@ class SaleControllerIT extends AbstractIntegrationTest {
         String adminToken = adminAccessToken();
         Long product = createPricedProduct("1", "0");
         addStock(product, 2);
-        Long saleId = readId(sell(saleBody(product, 2), adminToken).andExpect(status().isCreated()));
+        Long saleId = readId(sell(saleBody(product, 2), sellerToken()).andExpect(status().isCreated()));
         deactivateProduct(product);
 
         postJson("/api/v1/sales/" + saleId + "/cancellation", cancelBody("Wrong item"), adminToken)

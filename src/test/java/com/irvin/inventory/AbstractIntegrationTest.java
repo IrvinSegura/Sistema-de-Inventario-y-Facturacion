@@ -16,11 +16,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.atomic.AtomicReference;
 
-import com.irvin.inventory.config.StoreProperties;
 import com.jayway.jsonpath.JsonPath;
-import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -48,10 +45,6 @@ public abstract class AbstractIntegrationTest {
     protected static final String DEFAULT_PASSWORD = "user-password";
     protected static final String CASH_DRAWERS = "/api/v1/cash-drawers";
 
-    // Sales need an open cash drawer; the admin's is shared by every test, so none may close it.
-    // Its local day: a run that crosses midnight closes it and opens the new day's.
-    private static final AtomicReference<LocalDate> ADMIN_DRAWER_DAY = new AtomicReference<>();
-
     @Autowired
     protected MockMvc mockMvc;
 
@@ -59,29 +52,31 @@ public abstract class AbstractIntegrationTest {
     @Autowired
     protected JdbcTemplate jdbcTemplate;
 
-    @Autowired
-    private StoreProperties storeProperties;
-
-    @BeforeEach
-    void openAdminDrawer() throws Exception {
-        LocalDate today = LocalDate.now(storeProperties.timeZone());
-        if (today.equals(ADMIN_DRAWER_DAY.get())) {
-            return;
-        }
-        jdbcTemplate.update("""
-                UPDATE cash_drawer
-                SET closed_at = now(), closed_by = user_id, expected_cash = opening_float, counted_cash = opening_float
-                WHERE closed_at IS NULL AND user_id = (SELECT id FROM app_user WHERE email = ?)""", ADMIN_EMAIL);
-        openDrawer(adminAccessToken(), "0");
-        ADMIN_DRAWER_DAY.set(today);
-    }
-
-    // Opens today's drawer of the token's user.
+    // Opens today's drawer of the token's user, a seller (managers have none).
     protected Long openDrawer(String accessToken, String openingFloat) throws Exception {
         return readId(postJson(CASH_DRAWERS, """
                 {"openingFloat": %s}
                 """.formatted(openingFloat), accessToken)
                 .andExpect(status().isCreated()));
+    }
+
+    // A personal drawer of a past day, which the API can't open; closed with no difference if not open.
+    protected Long insertDrawer(Long userId, LocalDate businessDate, String openingFloat, boolean open) {
+        Long id = jdbcTemplate.queryForObject("""
+                INSERT INTO cash_drawer (responsible_id, opened_by, business_date, opening_float, opened_at)
+                VALUES (?, ?, ?, CAST(? AS numeric), now() - interval '1 day') RETURNING id""",
+                Long.class, userId, userId, businessDate, openingFloat);
+        if (!open) {
+            jdbcTemplate.update("""
+                    UPDATE cash_drawer
+                    SET closed_at = now() - interval '20 hours', closed_by = responsible_id,
+                        expected_cash = opening_float, counted_cash = opening_float
+                    WHERE id = ?""", id);
+        }
+        jdbcTemplate.update("""
+                INSERT INTO cash_drawer_member (cash_drawer_id, user_id, business_date, drawer_open)
+                VALUES (?, ?, ?, ?)""", id, userId, businessDate, open);
+        return id;
     }
 
     protected int stock(Long productId) {
@@ -176,8 +171,9 @@ public abstract class AbstractIntegrationTest {
                 .andExpect(status().isCreated()));
     }
 
+    // Product names are unique, so the default one carries a random suffix.
     protected Long createProduct(Long categoryId, int minStock) throws Exception {
-        return createProduct("Test product", categoryId, minStock);
+        return createProduct("Test product " + UUID.randomUUID(), categoryId, minStock);
     }
 
     // Unique SKU per call.
@@ -229,8 +225,8 @@ public abstract class AbstractIntegrationTest {
     // Unique SKU per call, in the seeded Pantry category.
     protected Long createPricedProduct(String salePrice, String taxRate) throws Exception {
         return readId(postJson("/api/v1/products", """
-                {"sku": "%s", "name": "Sale product", "categoryId": %d, "salePrice": %s, "taxRate": %s, "minStock": 0}
-                """.formatted(uniqueSku(), categoryId("Pantry"), salePrice, taxRate), adminAccessToken())
+                {"sku": "%s", "name": "Sale product %s", "categoryId": %d, "salePrice": %s, "taxRate": %s, "minStock": 0}
+                """.formatted(uniqueSku(), UUID.randomUUID(), categoryId("Pantry"), salePrice, taxRate), adminAccessToken())
                 .andExpect(status().isCreated()));
     }
 

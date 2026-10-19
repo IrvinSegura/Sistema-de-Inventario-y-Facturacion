@@ -11,6 +11,15 @@ import org.junit.jupiter.api.Test;
 class CategoryControllerIT extends AbstractIntegrationTest {
 
     @Test
+    void categoryNamesRejectMarkup() throws Exception {
+        postJson("/api/v1/categories", """
+                {"name": "<script>alert(1)</script>", "defaultTaxRate": 0}
+                """, adminAccessToken())
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.name").exists());
+    }
+
+    @Test
     void anyUserListsSeededCategoriesWithTheirDefaultTaxRate() throws Exception {
         String sellerToken = loginOk(createSeller().email(), DEFAULT_PASSWORD).accessToken();
 

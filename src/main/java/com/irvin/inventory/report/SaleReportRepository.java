@@ -24,7 +24,8 @@ import org.springframework.stereotype.Repository;
 
 // Aggregations in SQL: summing in Java would load every sale of the period.
 // Sale date ranges use ix_sale_date (ix_sale_user_date by seller); cancellation ranges use the
-// partial ix_sale_cancelled_at, with the seller as a filter (cancellations are few).
+// partial ix_sale_cancelled_at, with the seller as a filter (cancellations are few). A drawer's sales
+// and refunds use ix_sale_cash_drawer and ix_sale_cancellation_drawer.
 @Repository
 @RequiredArgsConstructor
 public class SaleReportRepository {
@@ -74,17 +75,49 @@ public class SaleReportRepository {
         }
     }
 
-    // Cash closing: every sale rung up in the period, whatever its current status, since the money
-    // entered the drawer then. Payment methods without sales are missing.
-    // Keep in sync with SaleRepository.netCash, which closes a drawer with the same rule.
-    public List<PaymentMethodAmount> salesByPaymentMethod(Period period) {
-        return amountsByPaymentMethod(period.where(DateColumn.SALE_DATE), period);
+    // Count and total per seller of the sale and payment method; combinations without sales are missing.
+    public record SellerPaymentAmount(long sellerId, String sellerName, PaymentMethod paymentMethod, long count,
+            BigDecimal total) {
     }
 
-    // Cash closing: cancellations made in the period, whatever the sale's date, since the money left
-    // the drawer then. Payment methods without cancellations are missing.
-    public List<PaymentMethodAmount> cancellationsByPaymentMethod(Period period) {
-        return amountsByPaymentMethod(period.where(DateColumn.CANCELLED_AT), period);
+    // Cash closing of a period: every sale rung up in it, whatever its current status, since the money
+    // entered a drawer then.
+    public List<SellerPaymentAmount> salesBySeller(Period period) {
+        return amountsBySeller(period.where(DateColumn.SALE_DATE), period.params());
+    }
+
+    // Cash closing of a period: cancellations made in it, whatever the sale's date, since the money left
+    // a drawer then. By the seller of the sale, whoever cancelled it.
+    public List<SellerPaymentAmount> cancellationsBySeller(Period period) {
+        return amountsBySeller(period.where(DateColumn.CANCELLED_AT), period.params());
+    }
+
+    // Cash closing of a drawer: the sales recorded in it, whatever their dates and current status.
+    // Keep both in sync with SaleRepository.drawerNetCash, which closes the drawer with the same rule.
+    public List<SellerPaymentAmount> drawerSalesBySeller(long drawerId) {
+        return amountsBySeller(" WHERE s.cash_drawer_id = :drawerId", drawerParams(drawerId));
+    }
+
+    // Cash closing of a drawer: the cancellations whose refund came out of it.
+    public List<SellerPaymentAmount> drawerCancellationsBySeller(long drawerId) {
+        return amountsBySeller(" WHERE s.cancellation_drawer_id = :drawerId", drawerParams(drawerId));
+    }
+
+    private List<SellerPaymentAmount> amountsBySeller(String where, MapSqlParameterSource params) {
+        return jdbcTemplate.query("""
+                SELECT s.user_id, u.name, s.payment_method, count(*) AS sale_count, sum(s.total) AS total
+                FROM sale s JOIN app_user u ON u.id = s.user_id""" + where + """
+
+                GROUP BY s.user_id, u.name, s.payment_method
+                ORDER BY u.name, s.user_id, s.payment_method""",
+                params,
+                (rs, rowNum) -> new SellerPaymentAmount(rs.getLong("user_id"), rs.getString("name"),
+                        PaymentMethod.valueOf(rs.getString("payment_method")), rs.getLong("sale_count"),
+                        money(rs.getBigDecimal("total"))));
+    }
+
+    private static MapSqlParameterSource drawerParams(long drawerId) {
+        return new MapSqlParameterSource().addValue("drawerId", drawerId);
     }
 
     private List<PaymentMethodAmount> amountsByPaymentMethod(String where, Period period) {

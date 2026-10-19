@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -20,19 +21,20 @@ import java.util.Map;
 import com.irvin.inventory.common.exception.BadRequestException;
 import com.irvin.inventory.common.exception.ConflictException;
 import com.irvin.inventory.config.StoreProperties;
-import com.irvin.inventory.report.SaleReportRepository.PaymentMethodAmount;
+import com.irvin.inventory.report.SaleReportRepository.SellerPaymentAmount;
 import com.irvin.inventory.report.dto.CashClosingResponse;
 import com.irvin.inventory.report.dto.CashClosingResponse.Amounts;
+import com.irvin.inventory.report.dto.CashClosingResponse.SellerAmounts;
 import com.irvin.inventory.report.dto.SaleReportResponse;
 import com.irvin.inventory.report.dto.SaleReportResponse.DailyTotal;
 import com.irvin.inventory.report.dto.SaleReportResponse.Totals;
-import com.irvin.inventory.sale.CashDrawer;
-import com.irvin.inventory.sale.CashDrawerRepository;
+import com.irvin.inventory.sale.CashDrawerService;
 import com.irvin.inventory.sale.PaymentMethod;
 import com.irvin.inventory.sale.SaleStatus;
+import com.irvin.inventory.sale.dto.CashDrawerResponse;
+import com.irvin.inventory.sale.dto.SaleResponse.Ref;
 import com.irvin.inventory.security.CurrentUser;
 import com.irvin.inventory.user.Role;
-import com.irvin.inventory.user.User;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -47,10 +49,10 @@ class SaleReportServiceTest {
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-03-11T03:00:00Z"), ZoneOffset.UTC);
 
     private final SaleReportRepository repository = mock(SaleReportRepository.class);
-    private final CashDrawerRepository cashDrawerRepository = mock(CashDrawerRepository.class);
+    private final CashDrawerService cashDrawerService = mock(CashDrawerService.class);
     private final PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
     private final SaleReportService service =
-            new SaleReportService(repository, cashDrawerRepository, new StoreProperties(ZONE), CLOCK, transactionManager);
+            new SaleReportService(repository, cashDrawerService, new StoreProperties(ZONE), CLOCK, transactionManager);
 
     @Test
     void sellerIsAlwaysScopedToTheirOwnSales() {
@@ -126,14 +128,14 @@ class SaleReportServiceTest {
 
     @Test
     void cashClosingDefaultsToTodayAndScopesBothQueriesToTheSeller() {
-        service.cashClosing(null, 99L, SELLER);
+        service.cashClosing(null, 99L, null, SELLER);
 
         ArgumentCaptor<SaleReportRepository.Period> sales = ArgumentCaptor.forClass(SaleReportRepository.Period.class);
         ArgumentCaptor<SaleReportRepository.Period> cancellations =
                 ArgumentCaptor.forClass(SaleReportRepository.Period.class);
-        verify(repository).salesByPaymentMethod(sales.capture());
-        verify(repository).cancellationsByPaymentMethod(cancellations.capture());
-        verify(cashDrawerRepository).findByBusinessDateAndUserId(DAY, SELLER.id());
+        verify(repository).salesBySeller(sales.capture());
+        verify(repository).cancellationsBySeller(cancellations.capture());
+        verify(cashDrawerService).findByDay(DAY, SELLER.id());
         assertThat(sales.getValue().from()).isEqualTo(DAY);
         assertThat(sales.getValue().toExclusive()).isEqualTo(DAY.plusDays(1));
         assertThat(sales.getValue().sellerId()).isEqualTo(SELLER.id());
@@ -142,15 +144,16 @@ class SaleReportServiceTest {
 
     @Test
     void cashClosingNetsCancellationsPerPaymentMethodAndAddsTheOpeningFloats() {
-        when(repository.salesByPaymentMethod(any())).thenReturn(List.of(
-                new PaymentMethodAmount(PaymentMethod.CARD, 1, new BigDecimal("20.00")),
-                new PaymentMethodAmount(PaymentMethod.CASH, 3, new BigDecimal("30.00"))));
-        when(repository.cancellationsByPaymentMethod(any())).thenReturn(List.of(
-                new PaymentMethodAmount(PaymentMethod.CASH, 2, new BigDecimal("12.50"))));
-        when(cashDrawerRepository.findByBusinessDateOrderByUserId(DAY))
-                .thenReturn(List.of(drawer(2L, "100.00"), drawer(3L, "50.00")));
+        when(repository.salesBySeller(any())).thenReturn(List.of(
+                amount(2L, PaymentMethod.CARD, 1, "20.00"),
+                amount(2L, PaymentMethod.CASH, 2, "20.00"),
+                amount(3L, PaymentMethod.CASH, 1, "10.00")));
+        when(repository.cancellationsBySeller(any())).thenReturn(List.of(
+                amount(3L, PaymentMethod.CASH, 2, "12.50")));
+        when(cashDrawerService.findByDay(DAY, null))
+                .thenReturn(List.of(drawer(2L, "100.00", true), drawer(3L, "50.00", true)));
 
-        CashClosingResponse closing = service.cashClosing(DAY, null, ADMIN);
+        CashClosingResponse closing = service.cashClosing(DAY, null, null, ADMIN);
 
         assertThat(closing.byPaymentMethod().keySet())
                 .containsExactly(PaymentMethod.CASH, PaymentMethod.CARD, PaymentMethod.TRANSFER);
@@ -160,14 +163,62 @@ class SaleReportServiceTest {
         assertThat(closing.expectedCash()).isEqualTo(new BigDecimal("167.50"));
         assertThat(closing.total()).isEqualTo(new Amounts(4, new BigDecimal("50.00"), 2,
                 new BigDecimal("12.50"), new BigDecimal("37.50")));
+        assertThat(closing.cashDrawerId()).isNull();
+    }
+
+    @Test
+    void cashClosingBreaksTheMovementsDownBySellerByName() {
+        when(repository.salesBySeller(any())).thenReturn(List.of(
+                amount(3L, PaymentMethod.CASH, 1, "10.00"),
+                amount(2L, PaymentMethod.CARD, 1, "20.00"),
+                amount(2L, PaymentMethod.CASH, 2, "20.00")));
+        // A seller with only a cancellation still shows up.
+        when(repository.cancellationsBySeller(any())).thenReturn(List.of(
+                amount(4L, PaymentMethod.CASH, 1, "5.00")));
+
+        List<SellerAmounts> bySeller = service.cashClosing(DAY, null, null, ADMIN).bySeller();
+
+        assertThat(bySeller).extracting(seller -> seller.seller().id()).containsExactly(2L, 3L, 4L);
+        assertThat(bySeller.getFirst().cash()).isEqualTo(Amounts.of(2, new BigDecimal("20.00"), 0, new BigDecimal("0.00")));
+        assertThat(bySeller.getFirst().total().net()).isEqualTo(new BigDecimal("40.00"));
+        assertThat(bySeller.getLast().cash().net()).isEqualTo(new BigDecimal("-5.00"));
+    }
+
+    @Test
+    void drawerClosingUsesTheDrawersOwnMovementsAndFloat() {
+        when(cashDrawerService.findById(5L, ADMIN)).thenReturn(drawer(2L, "300.00", true));
+        when(repository.drawerSalesBySeller(5L)).thenReturn(List.of(
+                amount(2L, PaymentMethod.CASH, 2, "20.00"),
+                amount(3L, PaymentMethod.CASH, 1, "10.00")));
+        when(repository.drawerCancellationsBySeller(5L)).thenReturn(List.of(amount(3L, PaymentMethod.CASH, 1, "10.00")));
+
+        // The date and seller are ignored.
+        CashClosingResponse closing = service.cashClosing(DAY.minusDays(3), 99L, 5L, ADMIN);
+
+        assertThat(closing.cashDrawerId()).isEqualTo(5L);
+        assertThat(closing.sellerId()).isNull();
+        assertThat(closing.date()).isEqualTo(DAY);
+        // Open, so not final yet.
+        assertThat(closing.closed()).isFalse();
+        assertThat(closing.expectedCash()).isEqualTo(new BigDecimal("320.00"));
+        assertThat(closing.bySeller()).hasSize(2);
+        verify(repository, never()).salesBySeller(any());
+    }
+
+    @Test
+    void sellerGetsADrawerClosingOnlyOnceTheDrawerIsClosed() {
+        when(cashDrawerService.findById(5L, SELLER)).thenReturn(drawer(SELLER.id(), "0.00", true));
+        when(cashDrawerService.findById(6L, SELLER)).thenReturn(drawer(SELLER.id(), "0.00", false));
+
+        assertThatThrownBy(() -> service.cashClosing(null, null, 5L, SELLER)).isInstanceOf(ConflictException.class);
+        assertThat(service.cashClosing(null, null, 6L, SELLER).closed()).isTrue();
     }
 
     @Test
     void cashClosingWithoutDrawersExpectsOnlyTheNetCash() {
-        when(repository.salesByPaymentMethod(any())).thenReturn(List.of(
-                new PaymentMethodAmount(PaymentMethod.CASH, 1, new BigDecimal("8.00"))));
+        when(repository.salesBySeller(any())).thenReturn(List.of(amount(2L, PaymentMethod.CASH, 1, "8.00")));
 
-        CashClosingResponse closing = service.cashClosing(DAY, null, ADMIN);
+        CashClosingResponse closing = service.cashClosing(DAY, null, null, ADMIN);
 
         assertThat(closing.openingFloat()).isEqualTo(new BigDecimal("0.00"));
         assertThat(closing.expectedCash()).isEqualTo(new BigDecimal("8.00"));
@@ -176,40 +227,45 @@ class SaleReportServiceTest {
 
     @Test
     void sellerGetsTheCashClosingOnlyOnceTheirDrawerIsClosed() {
-        when(cashDrawerRepository.findByBusinessDateAndUserId(DAY, SELLER.id()))
-                .thenReturn(List.of(drawer(SELLER.id(), "100.00")));
+        when(cashDrawerService.findByDay(DAY, SELLER.id())).thenReturn(List.of(drawer(SELLER.id(), "100.00", true)));
 
-        assertThatThrownBy(() -> service.cashClosing(DAY, null, SELLER)).isInstanceOf(ConflictException.class);
+        assertThatThrownBy(() -> service.cashClosing(DAY, null, null, SELLER)).isInstanceOf(ConflictException.class);
         // Admins audit open drawers.
-        assertThat(service.cashClosing(DAY, SELLER.id(), ADMIN).openingFloat()).isEqualTo(new BigDecimal("100.00"));
+        assertThat(service.cashClosing(DAY, SELLER.id(), null, ADMIN).openingFloat())
+                .isEqualTo(new BigDecimal("100.00"));
     }
 
-    private static CashDrawer drawer(Long userId, String openingFloat) {
-        User user = new User();
-        user.setId(userId);
-        user.setName("Seller " + userId);
-        return CashDrawer.open(user, DAY, new BigDecimal(openingFloat), Instant.parse("2026-03-10T15:00:00Z"));
+    private static CashDrawerResponse drawer(Long userId, String openingFloat, boolean open) {
+        Ref user = new Ref(userId, "Seller " + userId);
+        CashDrawerResponse.Closing closing = open ? null : CashDrawerResponse.Closing.of(
+                Instant.parse("2026-03-10T23:00:00Z"), user, BigDecimal.ZERO, BigDecimal.ZERO, null);
+        return new CashDrawerResponse(9L, user, user, List.of(user), DAY, new BigDecimal(openingFloat),
+                Instant.parse("2026-03-10T15:00:00Z"), closing);
+    }
+
+    private static SellerPaymentAmount amount(Long sellerId, PaymentMethod method, long count, String total) {
+        return new SellerPaymentAmount(sellerId, "Seller " + sellerId, method, count, new BigDecimal(total));
     }
 
     @Test
     void cashClosingIsClosedOnlyAfterTheDayEndsPlusTheMargin() {
         // Mar 10 ends at 2026-03-11T06:00Z in Mexico City; the margin is 60 s.
-        assertThat(serviceAt("2026-03-11T06:00:59Z").cashClosing(DAY, null, ADMIN).closed()).isFalse();
-        assertThat(serviceAt("2026-03-11T06:01:00Z").cashClosing(DAY, null, ADMIN).closed()).isTrue();
+        assertThat(serviceAt("2026-03-11T06:00:59Z").cashClosing(DAY, null, null, ADMIN).closed()).isFalse();
+        assertThat(serviceAt("2026-03-11T06:01:00Z").cashClosing(DAY, null, null, ADMIN).closed()).isTrue();
         // The default clock is still on Mar 10.
-        assertThat(service.cashClosing(DAY, null, ADMIN).closed()).isFalse();
-        assertThat(service.cashClosing(DAY.minusDays(1), null, ADMIN).closed()).isTrue();
+        assertThat(service.cashClosing(DAY, null, null, ADMIN).closed()).isFalse();
+        assertThat(service.cashClosing(DAY.minusDays(1), null, null, ADMIN).closed()).isTrue();
     }
 
     @Test
     void cashClosingRejectsDatesOutOfBounds() {
-        assertThatThrownBy(() -> service.cashClosing(LocalDate.of(1999, 12, 31), null, ADMIN))
+        assertThatThrownBy(() -> service.cashClosing(LocalDate.of(1999, 12, 31), null, null, ADMIN))
                 .isInstanceOf(BadRequestException.class);
         verifyNoInteractions(repository, transactionManager);
     }
 
     private SaleReportService serviceAt(String instant) {
-        return new SaleReportService(repository, cashDrawerRepository, new StoreProperties(ZONE),
+        return new SaleReportService(repository, cashDrawerService, new StoreProperties(ZONE),
                 Clock.fixed(Instant.parse(instant), ZoneOffset.UTC), transactionManager);
     }
 

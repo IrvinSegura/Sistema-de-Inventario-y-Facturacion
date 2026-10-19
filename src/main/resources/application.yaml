@@ -31,6 +31,11 @@ spring:
       pageable:
         serialization-mode: via-dto
         max-page-size: 100
+  servlet:
+    multipart:
+      # Product images; larger uploads get 413 before reaching the controller.
+      max-file-size: 5MB
+      max-request-size: 6MB
   # SMTP for password reset emails; without a host, codes aren't emailed (see app.password-reset).
   mail:
     host: ${MAIL_HOST:}
@@ -91,3 +96,14 @@ app:
       account-sid: ${TWILIO_ACCOUNT_SID:}
       auth-token: ${TWILIO_AUTH_TOKEN:}
       from-number: ${TWILIO_FROM_NUMBER:}
+  images:
+    # Local development: files under local.dir, served by this API at /images/**.
+    local:
+      enabled: true
+      dir: uploads/images
+      base-url: ${IMAGES_BASE_URL:http://localhost:8080/images}
+    # Production: with a cloud name, images go to Cloudinary instead.
+    cloudinary:
+      cloud-name: ${CLOUDINARY_CLOUD_NAME:}
+      api-key: ${CLOUDINARY_API_KEY:}
+      api-secret: ${CLOUDINARY_API_SECRET:}

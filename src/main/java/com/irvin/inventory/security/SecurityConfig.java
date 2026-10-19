@@ -47,6 +47,8 @@ public class SecurityConfig {
                                 "/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/logout",
                                 "/api/v1/auth/password-reset", "/api/v1/auth/password-reset/code").permitAll()
                         .requestMatchers("/actuator/health", "/error").permitAll()
+                        // Product photos in local development (LocalImageStorage); <img> sends no token.
+                        .requestMatchers(HttpMethod.GET, "/images/**").permitAll()
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2
@@ -91,7 +93,7 @@ public class SecurityConfig {
         return PasswordEncoderFactories.createDelegatingPasswordEncoder();
     }
 
-    // Maps the "role" claim to ROLE_ADMIN / ROLE_SELLER authorities.
+    // Maps the "role" claim to ROLE_ADMIN / ROLE_SUPERVISOR / ROLE_SELLER authorities.
     private static JwtAuthenticationConverter jwtAuthenticationConverter() {
         JwtGrantedAuthoritiesConverter authorities = new JwtGrantedAuthoritiesConverter();
         authorities.setAuthoritiesClaimName(TokenService.ROLE_CLAIM);

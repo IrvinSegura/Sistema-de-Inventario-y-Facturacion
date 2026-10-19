@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 
 import com.irvin.inventory.catalog.TaxRate;
 import com.irvin.inventory.common.Normalization;
+import com.irvin.inventory.common.validation.TextRules;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
@@ -13,9 +14,10 @@ import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 
 public record CreateProductRequest(
-        @NotBlank @Size(max = 50) String sku,
+        @NotBlank @Size(max = 50) @Pattern(regexp = TextRules.CODE_PATTERN, message = TextRules.CODE_MESSAGE) String sku,
         @Pattern(regexp = ProductRules.BARCODE_PATTERN, message = ProductRules.BARCODE_MESSAGE) String barcode,
-        @NotBlank @Size(max = 150) String name,
+        @NotBlank @Size(max = 150) @Pattern(regexp = TextRules.LABEL_PATTERN, message = TextRules.LABEL_MESSAGE)
+        String name,
         @Size(max = 500) String description,
         @Size(max = 500) @Pattern(regexp = ProductRules.IMAGE_URL_PATTERN, message = ProductRules.IMAGE_URL_MESSAGE)
         String imageUrl,

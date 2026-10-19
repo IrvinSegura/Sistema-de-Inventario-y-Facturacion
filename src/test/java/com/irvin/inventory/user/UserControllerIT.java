@@ -19,6 +19,19 @@ import org.junit.jupiter.api.Test;
 class UserControllerIT extends AbstractIntegrationTest {
 
     @Test
+    void personNamesAllowLettersOnly() throws Exception {
+        postJson("/api/v1/users", """
+                {"name": "Agent 007", "email": "digits-%s@test.com", "password": "%s", "role": "SELLER"}
+                """.formatted(UUID.randomUUID(), DEFAULT_PASSWORD), adminAccessToken())
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.name").exists());
+        postJson("/api/v1/users", """
+                {"name": "María José O'Neil-Peña", "email": "accents-%s@test.com", "password": "%s", "role": "SELLER"}
+                """.formatted(UUID.randomUUID(), DEFAULT_PASSWORD), adminAccessToken())
+                .andExpect(status().isCreated());
+    }
+
+    @Test
     void adminCreatesUserWithoutExposingPassword() throws Exception {
         String email = "new-" + UUID.randomUUID() + "@test.com";
 

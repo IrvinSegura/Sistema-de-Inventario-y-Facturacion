@@ -42,20 +42,24 @@ public class SaleReportController {
         return saleReportService.salesReport(from, to, sellerId, CurrentUser.from(jwt));
     }
 
-    @Operation(summary = "Cash closing for one day, by payment method",
-            description = "Sales rung up that day (even if cancelled later) minus cancellations made that day "
-                    + "(even of older sales), plus the day's cash drawers; expectedCash is their opening floats "
-                    + "plus the net cash. Nets can be negative when cancellations exceed sales. 'closed' turns true "
+    @Operation(summary = "Cash closing for one day or one drawer, by payment method and seller",
+            description = "A day: sales rung up that day (even if cancelled later) minus cancellations made that "
+                    + "day (even of older sales), plus the day's cash drawers; expectedCash is their opening "
+                    + "floats plus the net cash. 'closed' turns true "
                     + 2 * SaleService.TRANSACTION_TIMEOUT_SECONDS + " s after the day ends; until then, "
-                    + "sales still being recorded can change the figures. Sellers get their own drawer: their "
-                    + "sales and the cancellations of their sales, only once their drawer for that day is "
+                    + "sales still being recorded can change the figures. A drawer: the sales recorded in it "
+                    + "minus the refunds that came out of it, final once it is closed. Nets can be negative "
+                    + "when cancellations exceed sales. Sellers get their own sales (and the cancellations of "
+                    + "them) for a day, or a drawer they're in (404 otherwise), only once their drawer is "
                     + "closed (blind count, 409 before).")
     @GetMapping("/cash-closing")
     public CashClosingResponse cashClosing(
             @Parameter(description = "Day in the store's time zone; defaults to today")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
             @Parameter(description = "Ignored for sellers") @RequestParam(required = false) Long sellerId,
+            @Parameter(description = "One drawer instead of a day; date and sellerId are then ignored")
+            @RequestParam(required = false) Long cashDrawerId,
             @AuthenticationPrincipal Jwt jwt) {
-        return saleReportService.cashClosing(date, sellerId, CurrentUser.from(jwt));
+        return saleReportService.cashClosing(date, sellerId, cashDrawerId, CurrentUser.from(jwt));
     }
 }
