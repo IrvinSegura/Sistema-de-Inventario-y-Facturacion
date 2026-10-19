@@ -44,7 +44,8 @@ public class CustomerController {
 
     private final CustomerService customerService;
 
-    @Operation(summary = "Search customers sorted by name")
+    @Operation(summary = "Search customers, by name unless sorted",
+            description = "Sort by name, taxId, email, phone or createdAt.")
     @GetMapping
     public Page<CustomerResponse> search(
             @Parameter(description = "Matches name or tax ID") @RequestParam(required = false) String search,

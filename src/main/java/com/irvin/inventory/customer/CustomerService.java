@@ -1,7 +1,9 @@
 package com.irvin.inventory.customer;
 
+import java.util.Map;
 import java.util.Objects;
 
+import com.irvin.inventory.common.Sorting;
 import com.irvin.inventory.common.exception.BadRequestException;
 import com.irvin.inventory.common.exception.ConflictException;
 import com.irvin.inventory.common.exception.ForbiddenException;
@@ -12,7 +14,6 @@ import com.irvin.inventory.customer.dto.UpdateCustomerRequest;
 import com.irvin.inventory.security.CurrentUser;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -23,6 +24,13 @@ import org.springframework.transaction.annotation.Transactional;
 public class CustomerService {
 
     private static final Sort DEFAULT_SORT = Sort.by("name", "id");
+    // Orders a client may ask for (API name -> entity path); the default one breaks ties.
+    private static final Map<String, String> SORTABLE = Map.of(
+            "name", "name",
+            "taxId", "taxId",
+            "email", "email",
+            "phone", "phone",
+            "createdAt", "createdAt");
     static final String IN_USE_MESSAGE = "Customer has sales; deactivate it instead";
     static final String INCOMPLETE_FISCAL_DATA_MESSAGE =
             "Tax ID, fiscal postal code and tax regime must be given together";
@@ -35,7 +43,7 @@ public class CustomerService {
 
     @Transactional(readOnly = true)
     public Page<CustomerResponse> search(CustomerSearch search, Pageable pageable) {
-        Pageable sorted = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), DEFAULT_SORT);
+        Pageable sorted = Sorting.apply(pageable, SORTABLE, DEFAULT_SORT);
         return customerRepository.findAll(search.toSpecification(), sorted).map(CustomerResponse::from);
     }
 

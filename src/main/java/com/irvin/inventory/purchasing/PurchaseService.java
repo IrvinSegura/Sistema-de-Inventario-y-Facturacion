@@ -15,6 +15,7 @@ import java.util.stream.Collectors;
 import com.irvin.inventory.catalog.Product;
 import com.irvin.inventory.catalog.ProductRepository;
 import com.irvin.inventory.common.IdempotencyLock;
+import com.irvin.inventory.common.Sorting;
 import com.irvin.inventory.common.exception.BadRequestException;
 import com.irvin.inventory.common.exception.ConflictException;
 import com.irvin.inventory.common.exception.NotFoundException;
@@ -25,7 +26,6 @@ import com.irvin.inventory.stock.InventoryMovementRepository;
 import com.irvin.inventory.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -38,6 +38,13 @@ public class PurchaseService {
 
     private static final String IDEMPOTENCY_SCOPE = "purchase";
     private static final Sort DEFAULT_SORT = Sort.by(Sort.Direction.DESC, "purchaseDate", "id");
+    // Orders a client may ask for (API name -> entity path); the default one breaks ties.
+    private static final Map<String, String> SORTABLE = Map.of(
+            "id", "id",
+            "purchaseDate", "purchaseDate",
+            "total", "total",
+            "supplier", "supplier.name",
+            "recordedBy", "user.name");
     // Largest value of NUMERIC(12,2).
     private static final BigDecimal MAX_TOTAL = new BigDecimal("9999999999.99");
     private static final int MONEY_SCALE = 2;
@@ -114,7 +121,7 @@ public class PurchaseService {
 
     @Transactional(readOnly = true)
     public Page<PurchaseSummaryResponse> search(PurchaseSearch search, Pageable pageable) {
-        Pageable sorted = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), DEFAULT_SORT);
+        Pageable sorted = Sorting.apply(pageable, SORTABLE, DEFAULT_SORT);
         return purchaseRepository.findAll(search.toSpecification(), sorted).map(PurchaseSummaryResponse::from);
     }
 
