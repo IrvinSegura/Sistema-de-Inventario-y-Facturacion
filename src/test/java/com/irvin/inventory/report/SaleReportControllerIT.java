@@ -244,7 +244,7 @@ class SaleReportControllerIT extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.total.saleCount").value(0))
                 .andExpect(jsonPath("$.total.cancellationCount").value(1))
                 .andExpect(jsonPath("$.expectedCash").value(-3.0));
-        // The admin cancelled those sales, but they aren't in the admin's own drawer.
+        // The admin cancelled those sales but sold none, so filtering by the admin finds nothing.
         Long adminId = ((Number) JsonPath.read(getJson("/api/v1/users/me", adminToken)
                 .andReturn().getResponse().getContentAsString(), "$.id")).longValue();
         getJson(closingUrl + "&sellerId=" + adminId, adminToken)

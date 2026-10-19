@@ -32,12 +32,12 @@ public interface CashDrawerMemberRepository extends JpaRepository<CashDrawerMemb
             order by m.user.name, m.user.id""")
     List<CashDrawerMember> findWithUserByDrawerIds(Collection<Long> drawerIds);
 
-    // Active users who can still be assigned a drawer today.
+    // Active sellers who can still be assigned a drawer today.
     @Query("""
             select u from User u
-            where u.active = true
+            where u.active = true and u.role = com.irvin.inventory.user.Role.SELLER
               and not exists (select 1 from CashDrawerMember m
                               where m.user = u and (m.drawerOpen = true or m.businessDate = :today))
             order by u.name, u.id""")
-    List<User> findAssignableUsers(LocalDate today);
+    List<User> findAssignableSellers(LocalDate today);
 }

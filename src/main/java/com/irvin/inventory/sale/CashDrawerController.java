@@ -4,7 +4,7 @@ import java.net.URI;
 import java.time.LocalDate;
 import java.util.List;
 
-import com.irvin.inventory.sale.dto.AssignableUserResponse;
+import com.irvin.inventory.sale.dto.AssignableSellerResponse;
 import com.irvin.inventory.sale.dto.CashDrawerResponse;
 import com.irvin.inventory.sale.dto.CloseCashDrawerRequest;
 import com.irvin.inventory.sale.dto.OpenAssignedCashDrawerRequest;
@@ -32,8 +32,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-@Tag(name = "Cash drawers", description = "Any user opens and closes their own drawer; ADMIN and SUPERVISOR also "
-        + "open drawers for others (shared by several users if needed), see and close any")
+@Tag(name = "Cash drawers", description = "Sellers open their personal drawer and its responsible closes it; ADMIN "
+        + "and SUPERVISOR have none: they open drawers for sellers (shared by several if needed), see and close any")
 @RestController
 @RequestMapping(CashDrawerController.PATH)
 @RequiredArgsConstructor
@@ -44,19 +44,20 @@ public class CashDrawerController {
     private final CashDrawerService cashDrawerService;
 
     @Operation(summary = "Open today's cash drawer with its opening float",
-            description = "A personal drawer: the user is its only member and its responsible. Each user is in "
-                    + "one drawer per day in the store's time zone; sales need it open. 409 if they're still in "
-                    + "an open drawer (the previous day's must be closed first) or today's was already closed.")
+            description = "A seller's personal drawer: they are its only member and its responsible. Each seller "
+                    + "is in one drawer per day in the store's time zone; sales need it open. 403 for managers; "
+                    + "409 if they're still in an open drawer (the previous day's must be closed first) or "
+                    + "today's was already closed.")
     @PostMapping
     public ResponseEntity<CashDrawerResponse> open(
             @Valid @RequestBody OpenCashDrawerRequest request, @AuthenticationPrincipal Jwt jwt) {
-        return created(cashDrawerService.open(request, CurrentUser.from(jwt).id()));
+        return created(cashDrawerService.open(request, CurrentUser.from(jwt)));
     }
 
-    @Operation(summary = "Open today's cash drawer for one or several users",
+    @Operation(summary = "Open today's cash drawer for one or several sellers",
             description = "The manager hands over the float; the members sell from it and the responsible (one "
-                    + "of them) counts and closes it. 400 for unknown, inactive or repeated users; 409 if one of "
-                    + "them is already in an open drawer or had one today.")
+                    + "of them) counts and closes it. 400 for unknown, inactive, repeated or non-seller users; "
+                    + "409 if one of them is already in an open drawer or had one today.")
     @PreAuthorize(Roles.MANAGERS)
     @PostMapping("/assigned")
     public ResponseEntity<CashDrawerResponse> openAssigned(
@@ -64,12 +65,12 @@ public class CashDrawerController {
         return created(cashDrawerService.openAssigned(request, CurrentUser.from(jwt).id()));
     }
 
-    @Operation(summary = "Users who can be assigned a drawer today",
-            description = "Active users who aren't in an open drawer and had none today, by name.")
+    @Operation(summary = "Sellers who can be assigned a drawer today",
+            description = "Active sellers who aren't in an open drawer and had none today, by name.")
     @PreAuthorize(Roles.MANAGERS)
-    @GetMapping("/assignable-users")
-    public List<AssignableUserResponse> findAssignableUsers() {
-        return cashDrawerService.findAssignableUsers();
+    @GetMapping("/assignable-sellers")
+    public List<AssignableSellerResponse> findAssignableSellers() {
+        return cashDrawerService.findAssignableSellers();
     }
 
     @Operation(summary = "The open cash drawer the current user is in", description = "404 if none is open.")
@@ -81,15 +82,15 @@ public class CashDrawerController {
     @Operation(summary = "List cash drawers, newest day first", description = "Sellers only get the ones they're in.")
     @GetMapping
     public Page<CashDrawerResponse> search(
-            @Parameter(description = "Drawers this user is in; ignored for sellers")
-            @RequestParam(required = false) Long userId,
+            @Parameter(description = "Drawers this seller is in; ignored for sellers")
+            @RequestParam(required = false) Long sellerId,
             @Parameter(description = "First business day (inclusive), e.g. 2026-10-01")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @Parameter(description = "Last business day (inclusive), e.g. 2026-10-31")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @ParameterObject Pageable pageable,
             @AuthenticationPrincipal Jwt jwt) {
-        return cashDrawerService.search(new CashDrawerSearch(userId, from, to), pageable, CurrentUser.from(jwt));
+        return cashDrawerService.search(new CashDrawerSearch(sellerId, from, to), pageable, CurrentUser.from(jwt));
     }
 
     @Operation(summary = "Get a cash drawer", description = "Sellers get 404 for drawers they aren't in.")

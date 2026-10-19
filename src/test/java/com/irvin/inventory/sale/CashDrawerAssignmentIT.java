@@ -15,11 +15,11 @@ import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
-// Drawers a manager opens for one or several users.
-class SharedCashDrawerIT extends AbstractIntegrationTest {
+// Drawers a manager opens for one or several sellers.
+class CashDrawerAssignmentIT extends AbstractIntegrationTest {
 
     private static final String ASSIGNED = CASH_DRAWERS + "/assigned";
-    private static final String ASSIGNABLE = CASH_DRAWERS + "/assignable-users";
+    private static final String ASSIGNABLE = CASH_DRAWERS + "/assignable-sellers";
 
     @Autowired
     private StoreProperties storeProperties;
@@ -66,7 +66,7 @@ class SharedCashDrawerIT extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.content.length()").value(2));
 
         // 300 + 20 + 10 - 10.
-        String closingUrl = "/api/v1/sale-reports/cash-closing?drawerId=" + drawerId;
+        String closingUrl = "/api/v1/sale-reports/cash-closing?cashDrawerId=" + drawerId;
         String closing = getJson(closingUrl, supervisorToken)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.openingFloat").value(300.0))
@@ -100,7 +100,7 @@ class SharedCashDrawerIT extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.detail").value("Today's cash drawer is already closed"));
         // Every member finds it in their history and their day.
         getJson(CASH_DRAWERS, tokenB).andExpect(jsonPath("$.content[0].id").value(drawerId));
-        getJson(CASH_DRAWERS + "?userId=" + sellerB.id(), adminToken)
+        getJson(CASH_DRAWERS + "?sellerId=" + sellerB.id(), adminToken)
                 .andExpect(jsonPath("$.content.length()").value(1))
                 .andExpect(jsonPath("$.content[0].members.length()").value(2));
         getJson("/api/v1/sale-reports/cash-closing", tokenB)
@@ -140,13 +140,13 @@ class SharedCashDrawerIT extends AbstractIntegrationTest {
 
         postJson(ASSIGNED, assignedBody("0", other.id(), List.of(free.id())), adminToken)
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.detail").value("The responsible must be one of the assigned users"));
+                .andExpect(jsonPath("$.detail").value("The responsible must be one of the assigned sellers"));
         postJson(ASSIGNED, assignedBody("0", free.id(), List.of(free.id(), free.id())), adminToken)
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.detail").value("Each user can be assigned only once"));
+                .andExpect(jsonPath("$.detail").value("Each seller can be assigned only once"));
         postJson(ASSIGNED, assignedBody("0", 999999999L, List.of(free.id(), 999999999L)), adminToken)
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.detail").value("User not found: 999999999"));
+                .andExpect(jsonPath("$.detail").value("Seller not found: 999999999"));
         for (String body : List.of("{}", assignedBody("-1", free.id(), List.of(free.id())),
                 assignedBody("0", free.id(), List.of()))) {
             postJson(ASSIGNED, body, adminToken).andExpect(status().isBadRequest());
@@ -154,7 +154,7 @@ class SharedCashDrawerIT extends AbstractIntegrationTest {
         jdbcTemplate.update("UPDATE app_user SET active = false WHERE id = ?", other.id());
         postJson(ASSIGNED, assignedBody("0", free.id(), List.of(free.id(), other.id())), adminToken)
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.detail").value("User is inactive: Test User"));
+                .andExpect(jsonPath("$.detail").value("Seller is inactive: Test User"));
 
         CreatedUser selling = createSeller();
         openDrawer(loginOk(selling.email(), DEFAULT_PASSWORD).accessToken(), "0");
@@ -174,6 +174,33 @@ class SharedCashDrawerIT extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.detail").value("Test User already had a cash drawer today"));
         // Nothing was opened for the free seller along the way.
         assertThat(assignableIds(adminToken)).contains(free.id()).doesNotContain(other.id(), selling.id(), stale.id());
+    }
+
+    @Test
+    void managersHaveNoDrawerAndDoNotSell() throws Exception {
+        String adminToken = adminAccessToken();
+        CreatedUser supervisor = createUser("SUPERVISOR");
+        String supervisorToken = loginOk(supervisor.email(), DEFAULT_PASSWORD).accessToken();
+        Long adminId = jdbcTemplate.queryForObject("SELECT id FROM app_user WHERE email = ?", Long.class, ADMIN_EMAIL);
+        CreatedUser seller = createSeller();
+        Long product = createPricedProduct("10.00", "0");
+        addStock(product, 1);
+
+        for (String token : List.of(adminToken, supervisorToken)) {
+            postJson(CASH_DRAWERS, "{\"openingFloat\": 0}", token)
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.detail")
+                            .value("Only sellers have a cash drawer; managers open them for sellers"));
+            sell(saleBody(product, 1, "CASH"), token)
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.detail").value("Only sellers record sales: managers have no cash drawer"));
+        }
+        // Not even in a drawer a manager opens.
+        postJson(ASSIGNED, assignedBody("0", seller.id(), List.of(seller.id(), supervisor.id())), adminToken)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Only sellers can be assigned a cash drawer: Test User"));
+        assertThat(assignableIds(adminToken)).contains(seller.id()).doesNotContain(adminId, supervisor.id());
+        assertThat(stock(product)).isEqualTo(1);
     }
 
     @Test

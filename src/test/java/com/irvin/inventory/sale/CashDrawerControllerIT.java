@@ -126,7 +126,7 @@ class CashDrawerControllerIT extends AbstractIntegrationTest {
         jdbcTemplate.update("UPDATE sale SET cancelled_at = cancelled_at + interval '1 day' WHERE id = ?", later);
 
         // 100 + 30 + 20 - 10 - 20.
-        String drawerClosing = "/api/v1/sale-reports/cash-closing?drawerId=" + drawerId;
+        String drawerClosing = "/api/v1/sale-reports/cash-closing?cashDrawerId=" + drawerId;
         getJson(drawerClosing, adminToken)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.cashDrawerId").value(drawerId))
@@ -185,12 +185,12 @@ class CashDrawerControllerIT extends AbstractIntegrationTest {
         postJson(CASH_DRAWERS + "/" + drawerId + "/closing", closeBody("0", null), otherToken)
                 .andExpect(status().isNotFound());
         // The userId filter can't widen a seller's view.
-        String body = getJson(CASH_DRAWERS + "?userId=" + seller.id(), otherToken)
+        String body = getJson(CASH_DRAWERS + "?sellerId=" + seller.id(), otherToken)
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         assertThat(JsonPath.<List<Integer>>read(body, "$.content[*].responsible.id")).doesNotContain(seller.id().intValue());
 
-        getJson(CASH_DRAWERS + "?userId=" + seller.id(), adminToken)
+        getJson(CASH_DRAWERS + "?sellerId=" + seller.id(), adminToken)
                 .andExpect(jsonPath("$.content.length()").value(1))
                 .andExpect(jsonPath("$.content[0].id").value(drawerId));
         getJson(CASH_DRAWERS + "/" + drawerId, adminToken).andExpect(status().isOk());

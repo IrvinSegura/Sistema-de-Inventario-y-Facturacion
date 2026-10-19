@@ -17,13 +17,14 @@ import com.irvin.inventory.common.exception.ConflictException;
 import com.irvin.inventory.common.exception.ForbiddenException;
 import com.irvin.inventory.common.exception.NotFoundException;
 import com.irvin.inventory.config.StoreProperties;
-import com.irvin.inventory.sale.dto.AssignableUserResponse;
+import com.irvin.inventory.sale.dto.AssignableSellerResponse;
 import com.irvin.inventory.sale.dto.CashDrawerResponse;
 import com.irvin.inventory.sale.dto.CloseCashDrawerRequest;
 import com.irvin.inventory.sale.dto.OpenAssignedCashDrawerRequest;
 import com.irvin.inventory.sale.dto.OpenCashDrawerRequest;
 import com.irvin.inventory.sale.dto.SaleResponse.Ref;
 import com.irvin.inventory.security.CurrentUser;
+import com.irvin.inventory.user.Role;
 import com.irvin.inventory.user.User;
 import com.irvin.inventory.user.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -35,8 +36,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-// A drawer per local day with one or more members; each user is in one drawer per day and one open
-// drawer at a time. Sales and cancellations lock it FOR SHARE and closing locks it FOR UPDATE, so the
+// A drawer per local day with one or more sellers as members: each seller is in one drawer per day and
+// one open drawer at a time. Managers have none (they see every expected cash, so their count can't be
+// blind). Sales and cancellations lock the drawer FOR SHARE and closing locks it FOR UPDATE, so the
 // expected cash includes every sale and cancellation recorded in it before the closing.
 @Service
 @RequiredArgsConstructor
@@ -44,6 +46,8 @@ public class CashDrawerService {
 
     private static final Sort DEFAULT_SORT = Sort.by(Sort.Direction.DESC, "businessDate", "id");
     private static final int MONEY_SCALE = 2;
+    private static final String MANAGERS_HAVE_NO_DRAWER =
+            "Only sellers have a cash drawer; managers open them for sellers";
 
     private final CashDrawerRepository cashDrawerRepository;
     private final CashDrawerMemberRepository memberRepository;
@@ -52,9 +56,13 @@ public class CashDrawerService {
     private final StoreProperties storeProperties;
     private final Clock clock;
 
-    // The user's personal drawer for today in the store's time zone: they are its only member.
+    // The seller's personal drawer for today in the store's time zone: they are its only member.
     @Transactional
-    public CashDrawerResponse open(OpenCashDrawerRequest request, Long userId) {
+    public CashDrawerResponse open(OpenCashDrawerRequest request, CurrentUser actor) {
+        if (actor.isManager()) {
+            throw new ForbiddenException(MANAGERS_HAVE_NO_DRAWER);
+        }
+        Long userId = actor.id();
         Instant now = now();
         LocalDate today = today(now);
         // At most one row: today's drawer can't have opened while an older one was still open.
@@ -69,25 +77,28 @@ public class CashDrawerService {
         return save(CashDrawer.open(user, user, List.of(user), today, request.openingFloat().setScale(MONEY_SCALE), now));
     }
 
-    // A manager opens today's drawer for one or several users and hands over the float.
+    // A manager opens today's drawer for one or several sellers and hands over the float.
     @Transactional
     public CashDrawerResponse openAssigned(OpenAssignedCashDrawerRequest request, Long managerId) {
         List<Long> memberIds = request.memberIds();
         if (new HashSet<>(memberIds).size() != memberIds.size()) {
-            throw new BadRequestException("Each user can be assigned only once");
+            throw new BadRequestException("Each seller can be assigned only once");
         }
         if (!memberIds.contains(request.responsibleId())) {
-            throw new BadRequestException("The responsible must be one of the assigned users");
+            throw new BadRequestException("The responsible must be one of the assigned sellers");
         }
         Map<Long, User> users = userRepository.findAllById(memberIds).stream()
                 .collect(Collectors.toMap(User::getId, Function.identity()));
         for (Long id : memberIds) {
             User user = users.get(id);
             if (user == null) {
-                throw new BadRequestException("User not found: " + id);
+                throw new BadRequestException("Seller not found: " + id);
             }
             if (!user.isActive()) {
-                throw new BadRequestException("User is inactive: " + user.getName());
+                throw new BadRequestException("Seller is inactive: " + user.getName());
+            }
+            if (user.getRole() != Role.SELLER) {
+                throw new BadRequestException("Only sellers can be assigned a cash drawer: " + user.getName());
             }
         }
         Instant now = now();
@@ -176,27 +187,29 @@ public class CashDrawerService {
 
     @Transactional(readOnly = true)
     public Page<CashDrawerResponse> search(CashDrawerSearch search, Pageable pageable, CurrentUser viewer) {
-        CashDrawerSearch scoped = viewer.isManager() ? search : search.withUser(viewer.id());
+        CashDrawerSearch scoped = viewer.isManager() ? search : search.withSeller(viewer.id());
         Pageable sorted = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), DEFAULT_SORT);
         Page<CashDrawer> page = cashDrawerRepository.findAll(scoped.toSpecification(), sorted);
         Map<Long, List<Ref>> members = membersOf(page.getContent());
         return page.map(drawer -> CashDrawerResponse.from(drawer, members.get(drawer.getId())));
     }
 
-    // The cash closing's drawers of one day, in opening order; with memberId, only the ones they're in.
+    // The cash closing's drawers of one day, in opening order; with sellerId, only the ones they're in.
     // Joins the caller's transaction, so it reads the same snapshot as the rest of the closing.
     @Transactional(readOnly = true)
-    public List<CashDrawerResponse> findByDay(LocalDate day, Long memberId) {
-        List<CashDrawer> drawers = memberId == null
+    public List<CashDrawerResponse> findByDay(LocalDate day, Long sellerId) {
+        List<CashDrawer> drawers = sellerId == null
                 ? cashDrawerRepository.findByBusinessDateOrderById(day)
-                : cashDrawerRepository.findByBusinessDateAndMember(day, memberId);
+                : cashDrawerRepository.findByBusinessDateAndMember(day, sellerId);
         Map<Long, List<Ref>> members = membersOf(drawers);
         return drawers.stream().map(drawer -> CashDrawerResponse.from(drawer, members.get(drawer.getId()))).toList();
     }
 
     @Transactional(readOnly = true)
-    public List<AssignableUserResponse> findAssignableUsers() {
-        return memberRepository.findAssignableUsers(today(now())).stream().map(AssignableUserResponse::from).toList();
+    public List<AssignableSellerResponse> findAssignableSellers() {
+        return memberRepository.findAssignableSellers(today(now())).stream()
+                .map(AssignableSellerResponse::from)
+                .toList();
     }
 
     // Members never change and the drawer row is locked FOR SHARE, so the lookup itself needs no lock.

@@ -43,14 +43,15 @@ public class SaleController {
     @Operation(summary = "Record a sale and decrease stock",
             description = "Prices and VAT come from the products and totals are computed by the server. "
                     + "Without customerId the sale goes to the walk-in customer. A repeated Idempotency-Key "
-                    + "returns the original sale (200) instead of charging twice. Not enough stock: 409.")
+                    + "returns the original sale (200) instead of charging twice. Not enough stock: 409. "
+                    + "Only sellers sell, from their open drawer: 403 for managers.")
     @PostMapping
     public ResponseEntity<SaleResponse> create(
             @Valid @RequestBody CreateSaleRequest request,
             @Parameter(description = "UUID generated once per checkout; reuse it when retrying")
             @RequestHeader(name = "Idempotency-Key") UUID idempotencyKey,
             @AuthenticationPrincipal Jwt jwt) {
-        SaleService.CreateResult result = saleService.create(request, idempotencyKey, CurrentUser.from(jwt).id());
+        SaleService.CreateResult result = saleService.create(request, idempotencyKey, CurrentUser.from(jwt));
         if (!result.created()) {
             return ResponseEntity.ok(result.sale());
         }

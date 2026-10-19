@@ -89,10 +89,10 @@ public class SaleReportService {
     }
 
     // date defaults to today in the store's time zone; a drawer replaces both date and seller.
-    public CashClosingResponse cashClosing(LocalDate date, Long sellerId, Long drawerId, CurrentUser viewer) {
+    public CashClosingResponse cashClosing(LocalDate date, Long sellerId, Long cashDrawerId, CurrentUser viewer) {
         ZoneId zone = storeProperties.timeZone();
-        if (drawerId != null) {
-            return snapshotTransaction.execute(status -> buildDrawerClosing(drawerId, zone, viewer));
+        if (cashDrawerId != null) {
+            return snapshotTransaction.execute(status -> buildDrawerClosing(cashDrawerId, zone, viewer));
         }
         LocalDate day = date != null ? date : LocalDate.now(clock.withZone(zone));
         DateBounds.requireWithin(day);

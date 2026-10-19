@@ -58,8 +58,8 @@ public class SaleReportController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
             @Parameter(description = "Ignored for sellers") @RequestParam(required = false) Long sellerId,
             @Parameter(description = "One drawer instead of a day; date and sellerId are then ignored")
-            @RequestParam(required = false) Long drawerId,
+            @RequestParam(required = false) Long cashDrawerId,
             @AuthenticationPrincipal Jwt jwt) {
-        return saleReportService.cashClosing(date, sellerId, drawerId, CurrentUser.from(jwt));
+        return saleReportService.cashClosing(date, sellerId, cashDrawerId, CurrentUser.from(jwt));
     }
 }

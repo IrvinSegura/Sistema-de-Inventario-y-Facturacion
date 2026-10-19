@@ -17,6 +17,7 @@ import com.irvin.inventory.catalog.ProductRepository;
 import com.irvin.inventory.common.IdempotencyLock;
 import com.irvin.inventory.common.exception.BadRequestException;
 import com.irvin.inventory.common.exception.ConflictException;
+import com.irvin.inventory.common.exception.ForbiddenException;
 import com.irvin.inventory.common.exception.NotFoundException;
 import com.irvin.inventory.customer.Customer;
 import com.irvin.inventory.customer.CustomerRepository;
@@ -64,7 +65,12 @@ public class SaleService {
 
     // Header, items, stock decrements and inventory movements are saved in one transaction.
     @Transactional(timeout = TRANSACTION_TIMEOUT_SECONDS)
-    public CreateResult create(CreateSaleRequest request, UUID idempotencyKey, Long userId) {
+    public CreateResult create(CreateSaleRequest request, UUID idempotencyKey, CurrentUser seller) {
+        // Managers have no drawer, so their sales would land in none.
+        if (seller.isManager()) {
+            throw new ForbiddenException("Only sellers record sales: managers have no cash drawer");
+        }
+        Long userId = seller.id();
         ensureNoDuplicateProducts(request);
         idempotencyLock.acquire(IDEMPOTENCY_SCOPE, idempotencyKey);
         Optional<Sale> existing = saleRepository.findByIdempotencyKey(idempotencyKey);

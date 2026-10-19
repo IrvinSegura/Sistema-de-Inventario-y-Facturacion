@@ -11,10 +11,10 @@ import jakarta.persistence.criteria.Root;
 import jakarta.persistence.criteria.Subquery;
 import org.springframework.data.jpa.domain.Specification;
 
-// Cash drawer filters; null values are ignored. userId matches any member of the drawer.
+// Cash drawer filters; null values are ignored. sellerId matches any member of the drawer.
 // Business dates are inclusive local days.
 // Validated on construction, so a bad range fails before any transaction or query.
-public record CashDrawerSearch(Long userId, LocalDate from, LocalDate to) {
+public record CashDrawerSearch(Long sellerId, LocalDate from, LocalDate to) {
 
     public CashDrawerSearch {
         DateBounds.requireWithin(from, to);
@@ -23,19 +23,19 @@ public record CashDrawerSearch(Long userId, LocalDate from, LocalDate to) {
         }
     }
 
-    // Sellers only see the drawers they're in, whatever user filter they sent.
-    CashDrawerSearch withUser(Long userId) {
-        return new CashDrawerSearch(userId, from, to);
+    // Sellers only see the drawers they're in, whatever seller filter they sent.
+    CashDrawerSearch withSeller(Long sellerId) {
+        return new CashDrawerSearch(sellerId, from, to);
     }
 
     Specification<CashDrawer> toSpecification() {
         return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
-            if (userId != null) {
+            if (sellerId != null) {
                 Subquery<Long> memberOf = query.subquery(Long.class);
                 Root<CashDrawerMember> member = memberOf.from(CashDrawerMember.class);
                 memberOf.select(member.get("cashDrawer").get("id"))
-                        .where(cb.equal(member.get("user").get("id"), userId));
+                        .where(cb.equal(member.get("user").get("id"), sellerId));
                 predicates.add(root.get("id").in(memberOf));
             }
             if (from != null) {

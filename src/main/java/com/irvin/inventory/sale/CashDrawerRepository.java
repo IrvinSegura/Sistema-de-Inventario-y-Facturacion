@@ -42,9 +42,9 @@ public interface CashDrawerRepository extends JpaRepository<CashDrawer, Long>, J
     @Query("""
             select d from CashDrawer d
             where d.businessDate = :businessDate
-              and exists (select 1 from CashDrawerMember m where m.cashDrawer = d and m.user.id = :userId)
+              and exists (select 1 from CashDrawerMember m where m.cashDrawer = d and m.user.id = :sellerId)
             order by d.id""")
-    List<CashDrawer> findByBusinessDateAndMember(LocalDate businessDate, Long userId);
+    List<CashDrawer> findByBusinessDateAndMember(LocalDate businessDate, Long sellerId);
 
     // Taken to close the drawer: waits for the sales and cancellations still holding it.
     @Lock(LockModeType.PESSIMISTIC_WRITE)

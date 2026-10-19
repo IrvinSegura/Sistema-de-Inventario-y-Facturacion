@@ -4,15 +4,16 @@ REST API for a grocery store: inventory, supplier purchases and sales with basic
 
 ## Features
 
-- JWT authentication with `ADMIN` and `SELLER` roles.
+- JWT authentication with `ADMIN`, `SUPERVISOR` and `SELLER` roles.
 - Product catalog with categories, per-product VAT (0% / 16%), barcode lookup, search and product photos
   (PNG, JPEG, WebP or GIF, checked by content; Cloudinary in production, a local folder in development).
 - Supplier purchases with concurrency-safe stock and idempotent requests.
 - Customers, with SAT's walk-in customer ("PUBLICO EN GENERAL") as the default.
 - Sales with server-side prices and per-line VAT, sequential sale numbers, a required `Idempotency-Key` and
   atomic cancellation that returns stock. Stock never goes negative, even when sellers race for the last unit.
-- Cash drawers: each seller opens the day's drawer with an opening float (required to sell) and closes it
-  with the counted cash, recording the expected cash and the surplus or shortage.
+- Cash drawers: a seller opens the day's drawer with an opening float (required to sell), or a manager opens
+  one for a seller or a shared one for several; its responsible closes it with the counted cash, recording
+  the expected cash and the surplus or shortage. Managers have no drawer and don't sell.
 - Manual stock adjustments with a required reason (optionally idempotent), and a per-product stock ledger
   of every change.
 - Reports: sales by period (totals, payment methods, sellers, top products, daily breakdown in the store's

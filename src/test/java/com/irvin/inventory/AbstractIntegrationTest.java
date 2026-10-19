@@ -16,11 +16,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.atomic.AtomicReference;
 
-import com.irvin.inventory.config.StoreProperties;
 import com.jayway.jsonpath.JsonPath;
-import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -48,10 +45,6 @@ public abstract class AbstractIntegrationTest {
     protected static final String DEFAULT_PASSWORD = "user-password";
     protected static final String CASH_DRAWERS = "/api/v1/cash-drawers";
 
-    // Sales need an open cash drawer; the admin's is shared by every test, so none may close it.
-    // Its local day: a run that crosses midnight closes it and opens the new day's.
-    private static final AtomicReference<LocalDate> ADMIN_DRAWER_DAY = new AtomicReference<>();
-
     @Autowired
     protected MockMvc mockMvc;
 
@@ -59,30 +52,7 @@ public abstract class AbstractIntegrationTest {
     @Autowired
     protected JdbcTemplate jdbcTemplate;
 
-    @Autowired
-    private StoreProperties storeProperties;
-
-    @BeforeEach
-    void openAdminDrawer() throws Exception {
-        LocalDate today = LocalDate.now(storeProperties.timeZone());
-        if (today.equals(ADMIN_DRAWER_DAY.get())) {
-            return;
-        }
-        jdbcTemplate.update("""
-                WITH closed AS (
-                    UPDATE cash_drawer
-                    SET closed_at = now(), closed_by = responsible_id, expected_cash = opening_float,
-                        counted_cash = opening_float
-                    WHERE id IN (SELECT m.cash_drawer_id FROM cash_drawer_member m JOIN app_user u ON u.id = m.user_id
-                                 WHERE u.email = ? AND m.drawer_open)
-                    RETURNING id)
-                UPDATE cash_drawer_member SET drawer_open = false WHERE cash_drawer_id IN (SELECT id FROM closed)""",
-                ADMIN_EMAIL);
-        openDrawer(adminAccessToken(), "0");
-        ADMIN_DRAWER_DAY.set(today);
-    }
-
-    // Opens today's drawer of the token's user.
+    // Opens today's drawer of the token's user, a seller (managers have none).
     protected Long openDrawer(String accessToken, String openingFloat) throws Exception {
         return readId(postJson(CASH_DRAWERS, """
                 {"openingFloat": %s}
