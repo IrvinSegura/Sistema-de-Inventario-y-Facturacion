@@ -5,7 +5,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 import com.irvin.inventory.common.DateBounds;
-import com.irvin.inventory.common.exception.BadRequestException;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.jpa.domain.Specification;
 
@@ -14,10 +13,7 @@ import org.springframework.data.jpa.domain.Specification;
 public record PurchaseSearch(Long supplierId, Instant from, Instant to) {
 
     public PurchaseSearch {
-        DateBounds.requireWithin(from, to);
-        if (from != null && to != null && !from.isBefore(to)) {
-            throw new BadRequestException("'from' must be before 'to'");
-        }
+        DateBounds.requireRange(from, to, "from", "to");
     }
 
     Specification<Purchase> toSpecification() {
