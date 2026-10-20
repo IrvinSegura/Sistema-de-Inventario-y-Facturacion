@@ -2,14 +2,22 @@ package com.irvin.inventory.report;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
+import com.irvin.inventory.customer.Customer;
+import com.irvin.inventory.report.dto.CustomerSalesResponse;
+import com.irvin.inventory.report.dto.LowStockProductResponse.CategoryRef;
+import com.irvin.inventory.report.dto.ProductSalesResponse;
 import com.irvin.inventory.report.dto.SaleReportResponse.DailyTotal;
 import com.irvin.inventory.report.dto.SaleReportResponse.PaymentMethodTotal;
 import com.irvin.inventory.report.dto.SaleReportResponse.ProductTotal;
@@ -18,6 +26,10 @@ import com.irvin.inventory.report.dto.SaleReportResponse.Totals;
 import com.irvin.inventory.sale.PaymentMethod;
 import com.irvin.inventory.sale.SaleStatus;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -33,6 +45,20 @@ public class SaleReportRepository {
     private static final int TOP_PRODUCTS_LIMIT = 10;
     private static final int MONEY_SCALE = 2;
     private static final String COMPLETED_ONLY = " AND s.status = :completed";
+    private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(MONEY_SCALE);
+    // Same category filter for every product query; CAST so a null id still has a type.
+    private static final String CATEGORY_FILTER =
+            " AND (CAST(:categoryId AS bigint) IS NULL OR p.category_id = :categoryId)";
+    // The last sale is looked up only for the page's rows, walking ix_sale_item_product_sale backwards
+    // until the first completed one, so it costs the same however long the product's history is. Sale
+    // ids follow sale dates (only concurrent sales can swap by milliseconds), close enough for a date.
+    private static final String PRODUCT_COLUMNS = """
+            p.id, p.sku, p.name, p.active, p.stock, p.average_cost, c.id AS category_id,
+            c.name AS category_name,
+            (SELECT ls.sale_date FROM sale_item lsi JOIN sale ls ON ls.id = lsi.sale_id
+             WHERE lsi.product_id = p.id AND ls.status = :completed
+             ORDER BY lsi.sale_id DESC LIMIT 1) AS last_sale_date,
+            count(*) OVER () AS total_rows""";
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
 
@@ -192,6 +218,148 @@ public class SaleReportRepository {
                 (rs, rowNum) -> new DailyTotal(rs.getObject("day", LocalDate.class),
                         rs.getLong("sale_count"), money(rs.getBigDecimal("total"))));
         return days.stream().collect(Collectors.toMap(DailyTotal::date, Function.identity()));
+    }
+
+    // Completed lines with a known cost: what they sold for (before VAT) and what the units cost.
+    public record CostTotals(BigDecimal costedSubtotal, BigDecimal cost) {
+    }
+
+    public CostTotals completedCost(Period period) {
+        return jdbcTemplate.queryForObject("""
+                SELECT coalesce(sum(si.subtotal) FILTER (WHERE si.unit_cost IS NOT NULL), 0) AS costed_subtotal,
+                       coalesce(sum(si.quantity * si.unit_cost), 0) AS cost
+                FROM sale s JOIN sale_item si ON si.sale_id = s.id""" + period.where(DateColumn.SALE_DATE) + COMPLETED_ONLY,
+                period.params(),
+                (rs, rowNum) -> new CostTotals(money(rs.getBigDecimal("costed_subtotal")),
+                        cost(rs.getBigDecimal("cost"))));
+    }
+
+    // Completed lines of the period by product. Unit costs have four decimals; the sums are rounded once.
+    private static String soldProducts(Period period) {
+        return """
+                WITH sold AS (
+                    SELECT si.product_id, sum(si.quantity) AS quantity, sum(si.subtotal) AS subtotal,
+                           sum(si.quantity * si.unit_cost) AS cost, bool_and(si.unit_cost IS NOT NULL) AS costed
+                    FROM sale s JOIN sale_item si ON si.sale_id = s.id""" + period.where(DateColumn.SALE_DATE)
+                + COMPLETED_ONLY + """
+
+                    GROUP BY si.product_id
+                )
+                """;
+    }
+
+    // Best first: by amount, then by id so pages never overlap.
+    public Page<ProductSalesResponse> soldProducts(Period period, Long categoryId, Pageable pageable) {
+        MapSqlParameterSource params = productParams(period, categoryId);
+        return page(soldProducts(period) + "SELECT " + PRODUCT_COLUMNS + """
+                , sold.quantity, sold.subtotal, sold.cost, sold.costed
+                FROM sold JOIN product p ON p.id = sold.product_id JOIN category c ON c.id = p.category_id
+                WHERE TRUE""" + CATEGORY_FILTER + """
+
+                ORDER BY sold.subtotal DESC, p.id
+                LIMIT :limit OFFSET :offset""",
+                params, pageable,
+                (rs, rowNum) -> {
+                    BigDecimal subtotal = money(rs.getBigDecimal("subtotal"));
+                    BigDecimal cost = rs.getBoolean("costed") ? cost(rs.getBigDecimal("cost")) : null;
+                    return productSales(rs, rs.getLong("quantity"), subtotal, cost,
+                            cost == null ? null : subtotal.subtract(cost));
+                },
+                () -> jdbcTemplate.queryForObject(soldProducts(period) + """
+                        SELECT count(*) FROM sold JOIN product p ON p.id = sold.product_id WHERE TRUE"""
+                        + CATEGORY_FILTER, params, Long.class));
+    }
+
+    // Active products with units on hand and no completed sale in the period: stock that isn't moving.
+    // Products created after the period weren't there to sell.
+    private static String unsoldFilter(Period period) {
+        return """
+                 FROM product p JOIN category c ON c.id = p.category_id
+                WHERE p.active AND p.stock > 0
+                  AND p.created_at < CAST(:toExclusive AS timestamp) AT TIME ZONE :zone""" + CATEGORY_FILTER + """
+
+                  AND NOT EXISTS (
+                      SELECT 1 FROM sale_item si JOIN sale s ON s.id = si.sale_id""" + period.where(DateColumn.SALE_DATE)
+                + COMPLETED_ONLY + " AND si.product_id = p.id)";
+    }
+
+    // Most units first: the most money waiting on the shelf.
+    public Page<ProductSalesResponse> unsoldProducts(Period period, Long categoryId, Pageable pageable) {
+        MapSqlParameterSource params = productParams(period, categoryId);
+        return page("SELECT " + PRODUCT_COLUMNS + unsoldFilter(period)
+                        + " ORDER BY p.stock DESC, p.id LIMIT :limit OFFSET :offset",
+                params, pageable,
+                (rs, rowNum) -> productSales(rs, 0, ZERO, ZERO, ZERO),
+                () -> jdbcTemplate.queryForObject("SELECT count(*)" + unsoldFilter(period), params, Long.class));
+    }
+
+    private static MapSqlParameterSource productParams(Period period, Long categoryId) {
+        return period.params().addValue("categoryId", categoryId);
+    }
+
+    // One query per page: its rows carry the total (count(*) OVER (), "total_rows"), so the period isn't
+    // aggregated twice. Only an offset past the end, which returns no rows, needs the count apart.
+    private <T> Page<T> page(String sql, MapSqlParameterSource params, Pageable pageable, RowMapper<T> mapper,
+            Supplier<Long> count) {
+        long[] total = {0};
+        List<T> rows = jdbcTemplate.query(sql,
+                new MapSqlParameterSource(params.getValues())
+                        .addValue("limit", pageable.getPageSize())
+                        .addValue("offset", pageable.getOffset()),
+                (rs, rowNum) -> {
+                    total[0] = rs.getLong("total_rows");
+                    return mapper.mapRow(rs, rowNum);
+                });
+        if (rows.isEmpty() && pageable.getOffset() > 0) {
+            total[0] = count.get();
+        }
+        return new PageImpl<>(rows, pageable, total[0]);
+    }
+
+    private static ProductSalesResponse productSales(ResultSet rs, long quantity, BigDecimal subtotal,
+            BigDecimal cost, BigDecimal grossProfit) throws SQLException {
+        Timestamp lastSale = rs.getTimestamp("last_sale_date");
+        return new ProductSalesResponse(rs.getLong("id"), rs.getString("sku"), rs.getString("name"),
+                new CategoryRef(rs.getLong("category_id"), rs.getString("category_name")), rs.getBoolean("active"),
+                rs.getInt("stock"), rs.getBigDecimal("average_cost"), quantity, subtotal, cost, grossProfit,
+                lastSale == null ? null : lastSale.toInstant());
+    }
+
+    // Registered customers only: the walk-in customer would top every list without saying anything.
+    private static String customerSales(Period period) {
+        return " FROM sale s JOIN customer c ON c.id = s.customer_id" + period.where(DateColumn.SALE_DATE)
+                + COMPLETED_ONLY + " AND c.tax_id IS DISTINCT FROM :walkInTaxId";
+    }
+
+    // Best customers first, by what they spent.
+    public Page<CustomerSalesResponse> customers(Period period, Pageable pageable) {
+        MapSqlParameterSource params = customerParams(period);
+        return page("""
+                SELECT c.id, c.name, c.tax_id, count(*) AS sale_count, sum(s.total) AS total,
+                       max(s.sale_date) AS last_sale_date, count(*) OVER () AS total_rows""" + customerSales(period) + """
+
+                GROUP BY c.id, c.name, c.tax_id
+                ORDER BY total DESC, c.id
+                LIMIT :limit OFFSET :offset""",
+                params, pageable,
+                (rs, rowNum) -> {
+                    long count = rs.getLong("sale_count");
+                    BigDecimal total = money(rs.getBigDecimal("total"));
+                    return new CustomerSalesResponse(rs.getLong("id"), rs.getString("name"), rs.getString("tax_id"),
+                            count, total, total.divide(BigDecimal.valueOf(count), MONEY_SCALE, RoundingMode.HALF_UP),
+                            rs.getTimestamp("last_sale_date").toInstant());
+                },
+                () -> jdbcTemplate.queryForObject("SELECT count(DISTINCT s.customer_id)" + customerSales(period),
+                        params, Long.class));
+    }
+
+    private static MapSqlParameterSource customerParams(Period period) {
+        return period.params().addValue("walkInTaxId", Customer.WALK_IN_TAX_ID);
+    }
+
+    // Quantities times four-decimal unit costs: rounded to cents once, after summing.
+    private static BigDecimal cost(BigDecimal value) {
+        return value.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
     }
 
     private static BigDecimal money(BigDecimal value) {

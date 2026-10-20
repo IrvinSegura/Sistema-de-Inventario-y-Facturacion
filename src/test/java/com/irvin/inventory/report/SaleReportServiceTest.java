@@ -21,12 +21,14 @@ import java.util.Map;
 import com.irvin.inventory.common.exception.BadRequestException;
 import com.irvin.inventory.common.exception.ConflictException;
 import com.irvin.inventory.config.StoreProperties;
+import com.irvin.inventory.report.SaleReportRepository.CostTotals;
 import com.irvin.inventory.report.SaleReportRepository.SellerPaymentAmount;
 import com.irvin.inventory.report.dto.CashClosingResponse;
 import com.irvin.inventory.report.dto.CashClosingResponse.Amounts;
 import com.irvin.inventory.report.dto.CashClosingResponse.SellerAmounts;
 import com.irvin.inventory.report.dto.SaleReportResponse;
 import com.irvin.inventory.report.dto.SaleReportResponse.DailyTotal;
+import com.irvin.inventory.report.dto.SaleReportResponse.Profit;
 import com.irvin.inventory.report.dto.SaleReportResponse.Totals;
 import com.irvin.inventory.sale.CashDrawerService;
 import com.irvin.inventory.sale.PaymentMethod;
@@ -35,6 +37,7 @@ import com.irvin.inventory.sale.dto.CashDrawerResponse;
 import com.irvin.inventory.sale.dto.SaleResponse.Ref;
 import com.irvin.inventory.security.CurrentUser;
 import com.irvin.inventory.user.Role;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -53,6 +56,11 @@ class SaleReportServiceTest {
     private final PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
     private final SaleReportService service =
             new SaleReportService(repository, cashDrawerService, new StoreProperties(ZONE), CLOCK, transactionManager);
+
+    @BeforeEach
+    void noCostedSales() {
+        when(repository.completedCost(any())).thenReturn(new CostTotals(new BigDecimal("0.00"), new BigDecimal("0.00")));
+    }
 
     @Test
     void sellerIsAlwaysScopedToTheirOwnSales() {
@@ -92,6 +100,29 @@ class SaleReportServiceTest {
         assertThat(report.cancelled().saleCount()).isZero();
         assertThat(report.byDay()).extracting(DailyTotal::saleCount).containsExactly(0L, 3L, 0L);
         assertThat(report.byDay().getFirst().total()).isEqualTo(new BigDecimal("0.00"));
+    }
+
+    @Test
+    void grossProfitAndMarginComeFromTheCostedLines() {
+        when(repository.completedCost(any())).thenReturn(new CostTotals(new BigDecimal("300.00"), new BigDecimal("199.99")));
+
+        Profit profit = service.salesReport(DAY, DAY, null, ADMIN).profit();
+
+        assertThat(profit.grossProfit()).isEqualTo(new BigDecimal("100.01"));
+        // 100.01 / 300 = 0.33336... -> 0.3334.
+        assertThat(profit.margin()).isEqualTo(new BigDecimal("0.3334"));
+    }
+
+    @Test
+    void marginIsNullWithoutCostedSales() {
+        assertThat(service.salesReport(DAY, DAY, null, ADMIN).profit().margin()).isNull();
+    }
+
+    @Test
+    void sellersNeverGetCosts() {
+        assertThat(service.salesReport(DAY, DAY, null, SELLER).profit()).isNull();
+
+        verify(repository, never()).completedCost(any());
     }
 
     @Test
