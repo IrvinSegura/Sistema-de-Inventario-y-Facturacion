@@ -113,7 +113,9 @@ public class PurchaseService {
 
         for (CreatePurchaseRequest.Item item : items) {
             // Empty means the product was deactivated after it was loaded above.
-            inventoryMovementRepository.recordPurchase(item.productId(), item.quantity(), purchase.getId(), userId)
+            BigDecimal unitCost = item.unitCost().setScale(MONEY_SCALE, RoundingMode.UNNECESSARY);
+            inventoryMovementRepository
+                    .recordPurchase(item.productId(), item.quantity(), unitCost, purchase.getId(), userId)
                     .orElseThrow(() -> new BadRequestException("Product is inactive: " + item.productId()));
         }
         return new CreateResult(PurchaseResponse.from(purchase), true);
