@@ -56,7 +56,8 @@ public class PurchaseController {
                 .body(result.purchase());
     }
 
-    @Operation(summary = "List purchases, newest first")
+    @Operation(summary = "List purchases, newest first unless sorted",
+            description = "Sort by id, purchaseDate, total, supplier or recordedBy.")
     @GetMapping
     public Page<PurchaseSummaryResponse> search(
             @RequestParam(required = false) Long supplierId,

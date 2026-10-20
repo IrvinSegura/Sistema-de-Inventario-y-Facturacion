@@ -1,5 +1,6 @@
 package com.irvin.inventory.customer;
 
+import java.util.Map;
 import java.util.Objects;
 
 import com.irvin.inventory.common.exception.BadRequestException;
@@ -12,7 +13,6 @@ import com.irvin.inventory.customer.dto.UpdateCustomerRequest;
 import com.irvin.inventory.security.CurrentUser;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -35,7 +35,7 @@ public class CustomerService {
 
     @Transactional(readOnly = true)
     public Page<CustomerResponse> search(CustomerSearch search, Pageable pageable) {
-        Pageable sorted = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), DEFAULT_SORT);
+        Pageable sorted = Sorting.apply(pageable, SORTABLE, DEFAULT_SORT);
         return customerRepository.findAll(search.toSpecification(), sorted).map(CustomerResponse::from);
     }
 

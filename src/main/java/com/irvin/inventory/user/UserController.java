@@ -39,7 +39,8 @@ public class UserController {
         return ResponseEntity.created(URI.create("/api/v1/users/" + user.id())).body(user);
     }
 
-    @Operation(summary = "List users, sorted by name")
+    @Operation(summary = "List users, by name unless sorted",
+            description = "Sort by name, email, role or createdAt.")
     @GetMapping
     public Page<UserResponse> findAll(@ParameterObject Pageable pageable) {
         return userService.findAll(pageable);

@@ -1,5 +1,8 @@
 package com.irvin.inventory.purchasing;
 
+import java.util.Map;
+
+import com.irvin.inventory.common.Sorting;
 import com.irvin.inventory.common.exception.ConflictException;
 import com.irvin.inventory.common.exception.NotFoundException;
 import com.irvin.inventory.purchasing.dto.CreateSupplierRequest;
@@ -7,7 +10,6 @@ import com.irvin.inventory.purchasing.dto.SupplierResponse;
 import com.irvin.inventory.purchasing.dto.UpdateSupplierRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -18,12 +20,19 @@ import org.springframework.transaction.annotation.Transactional;
 public class SupplierService {
 
     private static final Sort DEFAULT_SORT = Sort.by("name", "id");
+    // Orders a client may ask for (API name -> entity path); the default one breaks ties.
+    private static final Map<String, String> SORTABLE = Map.of(
+            "name", "name",
+            "taxId", "taxId",
+            "email", "email",
+            "phone", "phone",
+            "createdAt", "createdAt");
 
     private final SupplierRepository supplierRepository;
 
     @Transactional(readOnly = true)
     public Page<SupplierResponse> search(SupplierSearch search, Pageable pageable) {
-        Pageable sorted = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), DEFAULT_SORT);
+        Pageable sorted = Sorting.apply(pageable, SORTABLE, DEFAULT_SORT);
         return supplierRepository.findAll(search.toSpecification(), sorted).map(SupplierResponse::from);
     }
 

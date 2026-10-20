@@ -38,7 +38,8 @@ public class ProductController {
     private final ProductService productService;
     private final ProductImageService productImageService;
 
-    @Operation(summary = "Search products sorted by name")
+    @Operation(summary = "Search products, by name unless sorted",
+            description = "Sort by name, sku, category, salePrice, stock, minStock or createdAt.")
     @GetMapping
     public Page<ProductResponse> search(
             @Parameter(description = "Matches name or SKU (contains), or barcode (exact)") @RequestParam(required = false) String search,
