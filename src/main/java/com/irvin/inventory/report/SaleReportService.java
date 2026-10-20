@@ -7,7 +7,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
-import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -16,15 +15,17 @@ import java.util.List;
 import java.util.Map;
 
 import com.irvin.inventory.common.DateBounds;
-import com.irvin.inventory.common.exception.BadRequestException;
 import com.irvin.inventory.common.exception.ConflictException;
 import com.irvin.inventory.config.StoreProperties;
 import com.irvin.inventory.report.SaleReportRepository.SellerPaymentAmount;
 import com.irvin.inventory.report.dto.CashClosingResponse;
 import com.irvin.inventory.report.dto.CashClosingResponse.Amounts;
 import com.irvin.inventory.report.dto.CashClosingResponse.SellerAmounts;
+import com.irvin.inventory.report.dto.CustomerSalesResponse;
+import com.irvin.inventory.report.dto.ProductSalesResponse;
 import com.irvin.inventory.report.dto.SaleReportResponse;
 import com.irvin.inventory.report.dto.SaleReportResponse.DailyTotal;
+import com.irvin.inventory.report.dto.SaleReportResponse.Profit;
 import com.irvin.inventory.report.dto.SaleReportResponse.Totals;
 import com.irvin.inventory.sale.CashDrawerService;
 import com.irvin.inventory.sale.PaymentMethod;
@@ -33,22 +34,21 @@ import com.irvin.inventory.sale.dto.SaleResponse.Ref;
 import com.irvin.inventory.sale.SaleService;
 import com.irvin.inventory.sale.SaleStatus;
 import com.irvin.inventory.security.CurrentUser;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class SaleReportService {
 
-    // A year (leap years included): bounds the daily breakdown and the scanned rows.
-    static final int MAX_DAYS = 366;
     // A sale stamped just before midnight commits at most this long after it; twice the timeout of
     // sale and cancellation transactions, so a closed day really has every movement.
     static final Duration CLOSING_MARGIN = Duration.ofSeconds(2L * SaleService.TRANSACTION_TIMEOUT_SECONDS);
-    // Seconds; JdbcTemplate turns the transaction timeout into a statement timeout.
-    private static final int TIMEOUT_SECONDS = 10;
     private static final int MONEY_SCALE = 2;
+    // Margins as a fraction with four decimals (0.2550 = 25.5 %).
+    private static final int MARGIN_SCALE = 4;
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(MONEY_SCALE);
     private static final Totals NO_SALES = new Totals(0, ZERO, ZERO, ZERO);
 
@@ -64,28 +64,39 @@ public class SaleReportService {
         this.cashDrawerService = cashDrawerService;
         this.storeProperties = storeProperties;
         this.clock = clock;
-        // One snapshot for every query, so totals and breakdowns agree even while sales come in.
-        // The timeout keeps a heavy report from holding a pool connection the checkout needs.
-        this.snapshotTransaction = new TransactionTemplate(transactionManager);
-        snapshotTransaction.setReadOnly(true);
-        snapshotTransaction.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
-        snapshotTransaction.setTimeout(TIMEOUT_SECONDS);
+        this.snapshotTransaction = ReportPeriods.snapshot(transactionManager);
     }
 
     // Both reports validate before the transaction starts, so invalid requests never take a pool connection.
     public SaleReportResponse salesReport(LocalDate from, LocalDate to, Long sellerId, CurrentUser viewer) {
-        DateBounds.requireWithin(from, to);
-        if (from.isAfter(to)) {
-            throw new BadRequestException("'from' must not be after 'to'");
-        }
-        if (ChronoUnit.DAYS.between(from, to) >= MAX_DAYS) {
-            throw new BadRequestException("The period can't exceed " + MAX_DAYS + " days");
-        }
-        ZoneId zone = storeProperties.timeZone();
-        // Both dates are inclusive calendar days in the store's time zone.
-        SaleReportRepository.Period period =
-                new SaleReportRepository.Period(from, to.plusDays(1), zone, scopedSellerId(sellerId, viewer));
-        return snapshotTransaction.execute(status -> buildSalesReport(from, to, zone, period));
+        ReportPeriods.requireValid(from, to);
+        SaleReportRepository.Period period = period(from, to, scopedSellerId(sellerId, viewer));
+        // Costs are for managers: a seller's report never carries them.
+        return snapshotTransaction.execute(status -> buildSalesReport(from, to, period, viewer.isManager()));
+    }
+
+    // Every product sold in the period (best first) or, with unsold, the active products in stock that
+    // didn't sell at all (most units first). Managers only (controller).
+    public Page<ProductSalesResponse> salesByProduct(LocalDate from, LocalDate to, Long categoryId, boolean unsold,
+            Pageable pageable) {
+        ReportPeriods.requireValid(from, to);
+        SaleReportRepository.Period period = period(from, to, null);
+        return snapshotTransaction.execute(status -> unsold
+                ? saleReportRepository.unsoldProducts(period, categoryId, pageable)
+                : saleReportRepository.soldProducts(period, categoryId, pageable));
+    }
+
+    // Registered customers by what they bought in the period, best first; the walk-in customer is left
+    // out. Managers only (controller).
+    public Page<CustomerSalesResponse> salesByCustomer(LocalDate from, LocalDate to, Pageable pageable) {
+        ReportPeriods.requireValid(from, to);
+        SaleReportRepository.Period period = period(from, to, null);
+        return snapshotTransaction.execute(status -> saleReportRepository.customers(period, pageable));
+    }
+
+    // Both dates are inclusive calendar days in the store's time zone.
+    private SaleReportRepository.Period period(LocalDate from, LocalDate to, Long sellerId) {
+        return new SaleReportRepository.Period(from, to.plusDays(1), storeProperties.timeZone(), sellerId);
     }
 
     // date defaults to today in the store's time zone; a drawer replaces both date and seller.
@@ -109,15 +120,15 @@ public class SaleReportService {
         return viewer.isManager() ? sellerId : viewer.id();
     }
 
-    private SaleReportResponse buildSalesReport(LocalDate from, LocalDate to, ZoneId zone,
-            SaleReportRepository.Period period) {
+    private SaleReportResponse buildSalesReport(LocalDate from, LocalDate to, SaleReportRepository.Period period,
+            boolean withProfit) {
         Map<SaleStatus, Totals> totals = saleReportRepository.totalsByStatus(period);
         Totals completed = totals.getOrDefault(SaleStatus.COMPLETED, NO_SALES);
         Map<LocalDate, DailyTotal> byDay = saleReportRepository.completedByDay(period);
         return new SaleReportResponse(
                 from,
                 to,
-                zone.getId(),
+                period.zone().getId(),
                 completed,
                 totals.getOrDefault(SaleStatus.CANCELLED, NO_SALES),
                 averageTicket(completed),
@@ -126,7 +137,16 @@ public class SaleReportService {
                 saleReportRepository.topProducts(period),
                 from.datesUntil(to.plusDays(1))
                         .map(day -> byDay.getOrDefault(day, new DailyTotal(day, 0, ZERO)))
-                        .toList());
+                        .toList(),
+                withProfit ? profit(saleReportRepository.completedCost(period)) : null);
+    }
+
+    private static Profit profit(SaleReportRepository.CostTotals costs) {
+        BigDecimal grossProfit = costs.costedSubtotal().subtract(costs.cost());
+        BigDecimal margin = costs.costedSubtotal().signum() == 0
+                ? null
+                : grossProfit.divide(costs.costedSubtotal(), MARGIN_SCALE, RoundingMode.HALF_UP);
+        return new Profit(costs.costedSubtotal(), costs.cost(), grossProfit, margin);
     }
 
     private static BigDecimal averageTicket(Totals completed) {
