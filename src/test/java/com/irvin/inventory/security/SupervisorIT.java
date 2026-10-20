@@ -29,6 +29,8 @@ class SupervisorIT extends AbstractIntegrationTest {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.resultingStock").value(4));
         getJson("/api/v1/inventory-movements?productId=" + productId, token).andExpect(status().isOk());
+        getJson("/api/v1/inventory-movements?type=ADJUSTMENT&from=2025-01-01T00:00:00Z&to=2025-12-31T00:00:00Z", token)
+                .andExpect(status().isOk());
     }
 
     @Test
