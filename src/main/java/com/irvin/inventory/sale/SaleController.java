@@ -59,8 +59,9 @@ public class SaleController {
     }
 
     @Operation(summary = "List sales, newest first unless sorted",
-            description = "Sellers only get their own sales. Sort by saleNumber, saleDate, total, paymentMethod, "
-                    + "status, customer or seller.")
+            description = "Sellers only get their own sales. Each one carries its cancellation (who, when and why) "
+                    + "when cancelled. Sort by saleNumber, saleDate, total, paymentMethod, status, customer, seller "
+                    + "or cancelledAt (with status=CANCELLED or a cancellation date range).")
     @GetMapping
     public Page<SaleSummaryResponse> search(
             @RequestParam(required = false) Long saleNumber,
@@ -73,10 +74,14 @@ public class SaleController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
             @Parameter(description = "Exclusive, ISO-8601 instant")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
+            @Parameter(description = "Cancelled at or after this ISO-8601 instant (only cancelled sales match)")
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant cancelledFrom,
+            @Parameter(description = "Cancelled before this ISO-8601 instant (only cancelled sales match)")
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant cancelledTo,
             @ParameterObject Pageable pageable,
             @AuthenticationPrincipal Jwt jwt) {
-        return saleService.search(new SaleSearch(saleNumber, customerId, sellerId, cashDrawerId, status, from, to),
-                pageable, CurrentUser.from(jwt));
+        return saleService.search(new SaleSearch(saleNumber, customerId, sellerId, cashDrawerId, status, from, to,
+                cancelledFrom, cancelledTo), pageable, CurrentUser.from(jwt));
     }
 
     @Operation(summary = "Get a sale with its items")

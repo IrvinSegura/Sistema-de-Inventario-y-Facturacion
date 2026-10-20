@@ -5,27 +5,30 @@ import java.util.ArrayList;
 import java.util.List;
 
 import com.irvin.inventory.common.DateBounds;
-import com.irvin.inventory.common.exception.BadRequestException;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.jpa.domain.Specification;
 
-// Sale filters; null values are ignored. The date range is [from, to); cashDrawerId matches the
-// drawer the sale was recorded in.
-// Validated on construction, so a bad range fails before any transaction or query.
+// Sale filters; nulls are ignored. [from, to) applies to the sale date, [cancelledFrom, cancelledTo) to
+// the cancellation date (only cancelled sales match); cashDrawerId matches the drawer the sale was
+// recorded in. Validated on construction, so a bad range fails before any transaction or query.
 public record SaleSearch(
         Long saleNumber, Long customerId, Long sellerId, Long cashDrawerId, SaleStatus status, Instant from,
-        Instant to) {
+        Instant to, Instant cancelledFrom, Instant cancelledTo) {
 
     public SaleSearch {
-        DateBounds.requireWithin(from, to);
-        if (from != null && to != null && !from.isBefore(to)) {
-            throw new BadRequestException("'from' must be before 'to'");
-        }
+        DateBounds.requireRange(from, to, "from", "to");
+        DateBounds.requireRange(cancelledFrom, cancelledTo, "cancelledFrom", "cancelledTo");
+    }
+
+    // Only cancelled sales can match, so ordering by cancellation date never meets a null.
+    boolean onlyCancelled() {
+        return status == SaleStatus.CANCELLED || cancelledFrom != null || cancelledTo != null;
     }
 
     // Sellers only see their own sales, whatever seller filter they sent.
     SaleSearch withSeller(Long sellerId) {
-        return new SaleSearch(saleNumber, customerId, sellerId, cashDrawerId, status, from, to);
+        return new SaleSearch(saleNumber, customerId, sellerId, cashDrawerId, status, from, to, cancelledFrom,
+                cancelledTo);
     }
 
     Specification<Sale> toSpecification() {
@@ -46,11 +49,22 @@ public record SaleSearch(
             if (status != null) {
                 predicates.add(cb.equal(root.get("status"), status));
             }
+            if (status == SaleStatus.CANCELLED) {
+                // Implied by ck_sale_status, but lets the planner use the partial index ix_sale_cancelled_at.
+                predicates.add(cb.isNotNull(root.get("cancelledAt")));
+            }
             if (from != null) {
                 predicates.add(cb.greaterThanOrEqualTo(root.get("saleDate"), from));
             }
             if (to != null) {
                 predicates.add(cb.lessThan(root.get("saleDate"), to));
+            }
+            // Uses the partial index ix_sale_cancelled_at (V9).
+            if (cancelledFrom != null) {
+                predicates.add(cb.greaterThanOrEqualTo(root.get("cancelledAt"), cancelledFrom));
+            }
+            if (cancelledTo != null) {
+                predicates.add(cb.lessThan(root.get("cancelledAt"), cancelledTo));
             }
             return cb.and(predicates.toArray(Predicate[]::new));
         };

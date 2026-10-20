@@ -6,6 +6,7 @@ import java.time.Instant;
 import com.irvin.inventory.sale.PaymentMethod;
 import com.irvin.inventory.sale.Sale;
 import com.irvin.inventory.sale.SaleStatus;
+import com.irvin.inventory.sale.dto.SaleResponse.Cancellation;
 import com.irvin.inventory.sale.dto.SaleResponse.Ref;
 
 // List view without items; GET /sales/{id} returns the full detail.
@@ -17,7 +18,9 @@ public record SaleSummaryResponse(
         Instant saleDate,
         PaymentMethod paymentMethod,
         SaleStatus status,
-        BigDecimal total) {
+        BigDecimal total,
+        // Null unless cancelled; inlined so a list of cancellations needs no detail calls.
+        Cancellation cancellation) {
 
     public static SaleSummaryResponse from(Sale sale) {
         return new SaleSummaryResponse(
@@ -28,6 +31,7 @@ public record SaleSummaryResponse(
                 sale.getSaleDate(),
                 sale.getPaymentMethod(),
                 sale.getStatus(),
-                sale.getTotal());
+                sale.getTotal(),
+                Cancellation.from(sale));
     }
 }

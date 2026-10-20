@@ -52,7 +52,8 @@ public class SaleService {
             "paymentMethod", "paymentMethod",
             "status", "status",
             "customer", "customer.name",
-            "seller", "user.name");
+            "seller", "user.name",
+            "cancelledAt", "cancelledAt");
     // Largest value of NUMERIC(12,2).
     private static final BigDecimal MAX_TOTAL = new BigDecimal("9999999999.99");
     private static final int MONEY_SCALE = 2;
@@ -159,6 +160,10 @@ public class SaleService {
 
     @Transactional(readOnly = true)
     public Page<SaleSummaryResponse> search(SaleSearch search, Pageable pageable, CurrentUser viewer) {
+        // Completed sales have no cancellation date: they would come first in a descending order.
+        if (pageable.getSort().getOrderFor("cancelledAt") != null && !search.onlyCancelled()) {
+            throw new BadRequestException("Sorting by cancelledAt needs status=CANCELLED or a cancellation date range");
+        }
         SaleSearch scoped = viewer.isManager() ? search : search.withSeller(viewer.id());
         Pageable sorted = Sorting.apply(pageable, SORTABLE, DEFAULT_SORT);
         return saleRepository.findAll(scoped.toSpecification(), sorted).map(SaleSummaryResponse::from);
