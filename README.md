@@ -14,8 +14,8 @@ REST API for a grocery store: inventory, supplier purchases and sales with basic
 - Cash drawers: a seller opens the day's drawer with an opening float (required to sell), or a manager opens
   one for a seller or a shared one for several; its responsible closes it with the counted cash, recording
   the expected cash and the surplus or shortage. Managers have no drawer and don't sell.
-- Manual stock adjustments with a required reason (optionally idempotent), and a per-product stock ledger
-  of every change.
+- Manual stock adjustments with a required reason (optionally idempotent), and a stock ledger of every
+  change, per product or by type across the store.
 - Reports: sales by period (totals, payment methods, sellers, top products, daily breakdown in the store's
   time zone, and gross profit for managers), a daily cash closing by payment method with the day's drawers and
   a low-stock reorder list. Sellers only see their own sales. Managers also get sales by product (with cost

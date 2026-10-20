@@ -220,7 +220,7 @@ erDiagram
 | Money as `NUMERIC(12,2)` / `BigDecimal`; `sale_price` is pre-tax | No floating-point rounding errors; totals computed server-side. |
 | Manual adjustments are signed `ADJUSTMENT` movements (one atomic CTE with `stock + qty >= 0`), allowed on inactive products | Shrinkage, damage and count differences are corrected without ever going negative; discontinued products still need their remaining units written off. |
 | Optional `Idempotency-Key` on adjustments, stored on the movement (V8, partial unique index, only for `ADJUSTMENT`) | A retried "-5 damaged" must not remove 10 units. Adjustments have no document table, so the key lives on the movement; the partial index keeps sale and purchase rows out. |
-| Stock ledger read per product (`productId` required, 404 if the product doesn't exist), newest first, in one `REPEATABLE READ` snapshot | Uses `ix_inventory_movement_product_date`; a store-wide ledger would scan the most write-heavy table. The page and its total count come from the same snapshot. Offset paging over a growing ledger can shift: clients keep the first request's `to` while paging. |
+| Stock ledger read per product (404 if the product doesn't exist) or by type across the store over at most 366 days (`productId`, or `type` with `from` and `to`), newest first, in one `REPEATABLE READ` snapshot | Uses `ix_inventory_movement_product_date` or `ix_inventory_movement_type_date` (V19); a store-wide ledger without a type would scan the most write-heavy table. The page and its total count come from the same snapshot. Offset paging over a growing ledger can shift: clients keep the first request's `to` while paging. |
 | `product.stock` is `INTEGER` | Overflow needs over 2.1 billion units of one product; accepted, it would surface as a generic 409. |
 | Sales reports aggregate in SQL inside one `REPEATABLE READ` read-only transaction with a 10 s timeout; the period is validated before it starts | Totals and breakdowns come from the same snapshot, so they agree even while sales are being recorded; no sale rows are loaded into memory. A heavy or invalid report never holds a pool connection the checkout needs. |
 | Report days follow `app.store.time-zone` (a region ID such as `America/Mexico_City`; offsets are rejected); periods are inclusive calendar days, up to 366, between 2000-01-01 and 9999-12-30 | Dates are stored in UTC, but "sales on Oct 1" means the store's local day. PostgreSQL converts both the period bounds and each sale's day (`AT TIME ZONE`), so filter and daily breakdown always agree; it reads offsets like `-06:00` with an inverted sign. |
@@ -243,12 +243,12 @@ erDiagram
 
 ## Indexes
 
-Details live in the migrations (`V1__initial-schema.sql`, V4, V9, V10, V14). Criteria:
+Details live in the migrations (`V1__initial-schema.sql`, V4, V9, V10, V14, V19). Criteria:
 
 - Every queried FK is indexed. The `UNIQUE (document_id, product_id)` constraints on line items also cover the document FK.
 - Trigram (GIN, `pg_trgm`) indexes on `lower(name)` and `lower(sku)` for product substring search (V4).
-- Date indexes for reports: `sale(sale_date)`, `purchase(purchase_date)`, `sale(user_id, sale_date)` and `inventory_movement(product_id, movement_date)`.
-- `sale(cancelled_at) WHERE cancelled_at IS NOT NULL` (V9) for the cash closing; partial because cancellations are rare.
+- Date indexes for reports: `sale(sale_date)`, `purchase(purchase_date)`, `sale(user_id, sale_date)`, `inventory_movement(product_id, movement_date)` and `inventory_movement(type, movement_date, id)` for store-wide lists such as every adjustment, built `CONCURRENTLY` (V19).
+- `sale(cancelled_at) WHERE cancelled_at IS NOT NULL` (V9) for the cash closing and the sales list's cancellation date filter; partial because cancellations are rare.
 - `cash_drawer_member (user_id, business_date)` unique, used by every sale to find its drawer; `cash_drawer_member(user_id) WHERE drawer_open` unique (one open drawer per seller); `cash_drawer(business_date)` for the store-wide cash closing (V10, V14).
 - `sale(cash_drawer_id)` and `sale(cancellation_drawer_id) WHERE cancellation_drawer_id IS NOT NULL` for a drawer's expected cash and tickets (V14).
 - `stock` is not indexed: it's the hottest column and the low-stock report scans a small catalog.
