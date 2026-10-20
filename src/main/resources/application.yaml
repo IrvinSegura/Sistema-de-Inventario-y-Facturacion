@@ -12,6 +12,11 @@ spring:
     hikari:
       # Fail fast (SQLSTATE 55P03) instead of holding a pool connection on a locked row.
       connection-init-sql: "SET lock_timeout = '5s'"
+  flyway:
+    postgresql:
+      # Session advisory lock instead of a transactional one: that keeps a transaction open while
+      # migrating, and CREATE INDEX CONCURRENTLY (non-transactional migrations) would wait for it forever.
+      transactional-lock: false
   jpa:
     hibernate:
       # Flyway owns the schema; Hibernate only validates it.
