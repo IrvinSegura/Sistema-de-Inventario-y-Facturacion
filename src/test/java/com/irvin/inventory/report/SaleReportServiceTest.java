@@ -30,6 +30,7 @@ import com.irvin.inventory.report.dto.SaleReportResponse;
 import com.irvin.inventory.report.dto.SaleReportResponse.DailyTotal;
 import com.irvin.inventory.report.dto.SaleReportResponse.Profit;
 import com.irvin.inventory.report.dto.SaleReportResponse.Totals;
+import com.irvin.inventory.sale.CashDrawerProperties;
 import com.irvin.inventory.sale.CashDrawerService;
 import com.irvin.inventory.sale.PaymentMethod;
 import com.irvin.inventory.sale.SaleStatus;
@@ -50,12 +51,15 @@ class SaleReportServiceTest {
     private static final LocalDate DAY = LocalDate.of(2026, 3, 10);
     // 03:00 UTC on Mar 11 is still Mar 10 in Mexico City (UTC-6).
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-03-11T03:00:00Z"), ZoneOffset.UTC);
+    private static final CashDrawerProperties CASH_DRAWER_PROPERTIES =
+            new CashDrawerProperties(new BigDecimal("75.00"));
 
     private final SaleReportRepository repository = mock(SaleReportRepository.class);
     private final CashDrawerService cashDrawerService = mock(CashDrawerService.class);
     private final PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
     private final SaleReportService service =
-            new SaleReportService(repository, cashDrawerService, new StoreProperties(ZONE), CLOCK, transactionManager);
+            new SaleReportService(repository, cashDrawerService, new StoreProperties(ZONE), CASH_DRAWER_PROPERTIES,
+                    CLOCK, transactionManager);
 
     @BeforeEach
     void noCostedSales() {
@@ -257,6 +261,20 @@ class SaleReportServiceTest {
     }
 
     @Test
+    void cashClosingCarriesTheConfiguredUnbalancedThresholdForManagersOnly() {
+        when(cashDrawerService.findByDay(DAY, SELLER.id())).thenReturn(List.of(drawer(SELLER.id(), "100.00", false)));
+
+        assertThat(service.cashClosing(DAY, null, null, ADMIN).unbalancedThreshold())
+                .isEqualTo(new BigDecimal("75.00"));
+        assertThat(service.cashClosing(DAY, null, null, SELLER).unbalancedThreshold()).isNull();
+    }
+
+    @Test
+    void unbalancedThresholdGetsTwoDecimals() {
+        assertThat(new CashDrawerProperties(new BigDecimal("50")).unbalancedThreshold()).isEqualTo(new BigDecimal("50.00"));
+    }
+
+    @Test
     void sellerGetsTheCashClosingOnlyOnceTheirDrawerIsClosed() {
         when(cashDrawerService.findByDay(DAY, SELLER.id())).thenReturn(List.of(drawer(SELLER.id(), "100.00", true)));
 
@@ -296,7 +314,7 @@ class SaleReportServiceTest {
     }
 
     private SaleReportService serviceAt(String instant) {
-        return new SaleReportService(repository, cashDrawerService, new StoreProperties(ZONE),
+        return new SaleReportService(repository, cashDrawerService, new StoreProperties(ZONE), CASH_DRAWER_PROPERTIES,
                 Clock.fixed(Instant.parse(instant), ZoneOffset.UTC), transactionManager);
     }
 

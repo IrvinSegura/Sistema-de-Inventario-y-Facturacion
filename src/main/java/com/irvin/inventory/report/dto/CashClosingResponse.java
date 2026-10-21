@@ -35,7 +35,10 @@ public record CashClosingResponse(
         // closing snapshot, it includes cancellations made after the drawer was closed.
         BigDecimal expectedCash,
         // The day's drawers in opening order (with a seller, the ones they're in), or the drawer.
-        List<CashDrawerResponse> drawers) {
+        List<CashDrawerResponse> drawers,
+        // A closed drawer whose difference reaches this, either way, is unbalanced
+        // (app.cash-drawer.unbalanced-threshold); null for sellers.
+        BigDecimal unbalancedThreshold) {
 
     // net = salesTotal - cancellationsTotal; can be negative.
     public record Amounts(
