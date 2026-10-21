@@ -98,7 +98,7 @@ class CustomerControllerIT extends AbstractIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phone").value("5512345678"));
 
-        String forbidden = "Only an admin can change a customer's tax ID or active status";
+        String forbidden = "Only a manager can change a customer's tax ID or active status";
         String otherTaxId = randomCompanyTaxId();
         putJson("/api/v1/customers/" + id, """
                 {"name": "Renamed", "taxId": "%s", %s, "active": true, "version": 1}
@@ -199,6 +199,22 @@ class CustomerControllerIT extends AbstractIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.fiscalPostalCode").value("06600"))
                 .andExpect(jsonPath("$.taxRegime").value("601"));
+    }
+
+    @Test
+    void customerWithTaxIdButNoFiscalDataCanStillBeDeactivatedAsIs() throws Exception {
+        String token = adminAccessToken();
+        String taxId = randomCompanyTaxId();
+        // Saved before customers had fiscal data.
+        Long id = jdbcTemplate.queryForObject(
+                "INSERT INTO customer (name, tax_id) VALUES ('Legacy', ?) RETURNING id", Long.class, taxId);
+
+        putJson("/api/v1/customers/" + id, """
+                {"name": "Legacy", "taxId": "%s", "active": false, "version": 0}
+                """.formatted(taxId), token)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.active").value(false))
+                .andExpect(jsonPath("$.fiscalPostalCode").doesNotExist());
     }
 
     @Test
