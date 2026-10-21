@@ -77,7 +77,11 @@ public class CustomerService {
         if (customer.isWalkIn()) {
             throw new ConflictException("The walk-in customer can't be modified");
         }
-        requireFiscalData(request.taxId(), request.fiscalPostalCode(), request.taxRegime());
+        // A customer saved with a tax ID before fiscal data existed (V15) can still be deactivated or
+        // reactivated as is; any other edit must complete the data.
+        if (!changesOnlyActiveFlag(customer, request)) {
+            requireFiscalData(request.taxId(), request.fiscalPostalCode(), request.taxRegime());
+        }
         if (!customer.getVersion().equals(request.version())) {
             throw ConflictException.staleVersion();
         }
@@ -85,11 +89,12 @@ public class CustomerService {
         boolean sensitiveChange = !Objects.equals(customer.getTaxId(), request.taxId())
                 || customer.isActive() != request.active();
         if (sensitiveChange && !editor.isManager()) {
-            throw new ForbiddenException("Only an admin can change a customer's tax ID or active status");
+            throw new ForbiddenException("Only a manager can change a customer's tax ID or active status");
         }
         if (request.taxId() != null && customerRepository.existsByTaxIdAndIdNot(request.taxId(), id)) {
             throw duplicateTaxId();
         }
+        // Keep in step with changesOnlyActiveFlag.
         customer.setName(request.name());
         customer.setTaxId(request.taxId());
         customer.setEmail(request.email());
@@ -114,6 +119,17 @@ public class CustomerService {
         }
         customerRepository.delete(customer);
         customerRepository.flush();
+    }
+
+    // Every field update() sets except `active`, compared with what is stored.
+    private static boolean changesOnlyActiveFlag(Customer customer, UpdateCustomerRequest request) {
+        return Objects.equals(customer.getName(), request.name())
+                && Objects.equals(customer.getTaxId(), request.taxId())
+                && Objects.equals(customer.getEmail(), request.email())
+                && Objects.equals(customer.getPhone(), request.phone())
+                && Objects.equals(customer.getAddress(), request.address())
+                && Objects.equals(customer.getFiscalPostalCode(), request.fiscalPostalCode())
+                && Objects.equals(customer.getTaxRegime(), request.taxRegime());
     }
 
     // An invoice (CFDI 4.0) needs all three, so a customer has the complete set or none of it.
