@@ -62,7 +62,7 @@ public class AuthService {
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash()) || !user.isActive()) {
             throw new AuthenticationFailedException();
         }
-        return transactionTemplate.execute(status -> issueTokens(user));
+        return transactionTemplate.execute(status -> issueTokens(user, clock.instant()));
     }
 
     // Rotation: each refresh token works once. Reusing a ROTATED token signals theft, so every
@@ -84,11 +84,14 @@ public class AuthService {
             }
             throw new AuthenticationFailedException();
         }
-        if (!token.getExpiresAt().isAfter(now) || !user.isActive()) {
+        // The session's end is checked too, not only the stored expiry: tokens issued before a lower
+        // max-session-age (or before V20) may expire after it.
+        Instant sessionEnd = token.getSessionStartedAt().plus(jwtProperties.maxSessionAge());
+        if (!token.getExpiresAt().isAfter(now) || !sessionEnd.isAfter(now) || !user.isActive()) {
             throw new AuthenticationFailedException();
         }
         token.revoke(now, RevocationReason.ROTATED);
-        return issueTokens(user);
+        return issueTokens(user, token.getSessionStartedAt());
     }
 
     @Transactional
@@ -104,7 +107,9 @@ public class AuthService {
         refreshTokenRepository.revokeAllByUserId(userId, clock.instant(), RevocationReason.SESSIONS_REVOKED);
     }
 
-    private TokenResponse issueTokens(User user) {
+    // Each refresh slides the expiry forward, but never past the session's maximum age: a browser left
+    // signed in (whose screens poll the API) still has to log in again.
+    private TokenResponse issueTokens(User user, Instant sessionStartedAt) {
         byte[] bytes = new byte[REFRESH_TOKEN_BYTES];
         RANDOM.nextBytes(bytes);
         String rawRefreshToken = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
@@ -112,7 +117,10 @@ public class AuthService {
         RefreshToken refreshToken = new RefreshToken();
         refreshToken.setUser(user);
         refreshToken.setTokenHash(hash(rawRefreshToken));
-        refreshToken.setExpiresAt(clock.instant().plus(jwtProperties.refreshTokenTtl()));
+        Instant slidingExpiry = clock.instant().plus(jwtProperties.refreshTokenTtl());
+        Instant sessionEnd = sessionStartedAt.plus(jwtProperties.maxSessionAge());
+        refreshToken.setSessionStartedAt(sessionStartedAt);
+        refreshToken.setExpiresAt(slidingExpiry.isBefore(sessionEnd) ? slidingExpiry : sessionEnd);
         refreshTokenRepository.save(refreshToken);
 
         return TokenResponse.bearer(

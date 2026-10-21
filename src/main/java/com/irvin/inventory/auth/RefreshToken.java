@@ -38,6 +38,10 @@ public class RefreshToken {
     @Column(nullable = false)
     private Instant expiresAt;
 
+    // The login this token descends from through rotations; caps its expiry (app.jwt.max-session-age).
+    @Column(nullable = false, updatable = false)
+    private Instant sessionStartedAt;
+
     private Instant revokedAt;
 
     @Enumerated(EnumType.STRING)

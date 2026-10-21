@@ -65,6 +65,8 @@ app:
     secret: ${JWT_SECRET}
     access-token-ttl: 15m
     refresh-token-ttl: 7d
+    # Sign in again this long after logging in, however often the session refreshed.
+    max-session-age: ${JWT_MAX_SESSION_AGE:7d}
   admin:
     email: ${ADMIN_EMAIL:}
     password: ${ADMIN_PASSWORD:}
