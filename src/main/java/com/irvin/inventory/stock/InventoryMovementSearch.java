@@ -13,6 +13,9 @@ public record InventoryMovementSearch(Long productId, MovementType type, Instant
 
     // Like the reports' periods: bounds the rows a store-wide page and its count read.
     static final int MAX_STORE_WIDE_DAYS = 366;
+    // Calendar days between the store's midnights: a span across the end of daylight saving time is
+    // an hour longer, so a full 366-day range must still pass.
+    private static final Duration MAX_STORE_WIDE_SPAN = Duration.ofDays(MAX_STORE_WIDE_DAYS).plusHours(1);
 
     public InventoryMovementSearch {
         DateBounds.requireRange(from, to, "from", "to");
@@ -20,7 +23,7 @@ public record InventoryMovementSearch(Long productId, MovementType type, Instant
             if (type == null || from == null || to == null) {
                 throw new BadRequestException("Send a productId, or a type with 'from' and 'to'");
             }
-            if (Duration.between(from, to).compareTo(Duration.ofDays(MAX_STORE_WIDE_DAYS)) > 0) {
+            if (Duration.between(from, to).compareTo(MAX_STORE_WIDE_SPAN) > 0) {
                 throw new BadRequestException("A store-wide search can't exceed " + MAX_STORE_WIDE_DAYS + " days");
             }
         }
