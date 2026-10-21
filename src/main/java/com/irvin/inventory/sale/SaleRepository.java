@@ -16,9 +16,9 @@ import org.springframework.data.jpa.repository.Query;
 
 public interface SaleRepository extends JpaRepository<Sale, Long>, JpaSpecificationExecutor<Sale> {
 
-    // List view: header only, no items.
+    // List view: header and cancellation, no items.
     @Override
-    @EntityGraph(attributePaths = {"customer", "user"})
+    @EntityGraph(attributePaths = {"customer", "user", "cancelledBy"})
     Page<Sale> findAll(Specification<Sale> spec, Pageable pageable);
 
     @EntityGraph(attributePaths = {"customer", "user", "cancelledBy", "items", "items.product"})

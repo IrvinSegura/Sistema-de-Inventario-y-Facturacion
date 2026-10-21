@@ -27,6 +27,7 @@ import com.irvin.inventory.report.dto.SaleReportResponse;
 import com.irvin.inventory.report.dto.SaleReportResponse.DailyTotal;
 import com.irvin.inventory.report.dto.SaleReportResponse.Profit;
 import com.irvin.inventory.report.dto.SaleReportResponse.Totals;
+import com.irvin.inventory.sale.CashDrawerProperties;
 import com.irvin.inventory.sale.CashDrawerService;
 import com.irvin.inventory.sale.PaymentMethod;
 import com.irvin.inventory.sale.dto.CashDrawerResponse;
@@ -55,14 +56,17 @@ public class SaleReportService {
     private final SaleReportRepository saleReportRepository;
     private final CashDrawerService cashDrawerService;
     private final StoreProperties storeProperties;
+    private final CashDrawerProperties cashDrawerProperties;
     private final Clock clock;
     private final TransactionTemplate snapshotTransaction;
 
     public SaleReportService(SaleReportRepository saleReportRepository, CashDrawerService cashDrawerService,
-            StoreProperties storeProperties, Clock clock, PlatformTransactionManager transactionManager) {
+            StoreProperties storeProperties, CashDrawerProperties cashDrawerProperties, Clock clock,
+            PlatformTransactionManager transactionManager) {
         this.saleReportRepository = saleReportRepository;
         this.cashDrawerService = cashDrawerService;
         this.storeProperties = storeProperties;
+        this.cashDrawerProperties = cashDrawerProperties;
         this.clock = clock;
         this.snapshotTransaction = ReportPeriods.snapshot(transactionManager);
     }
@@ -165,7 +169,8 @@ public class SaleReportService {
             throw blindCount();
         }
         return cashClosing(day, zone, period.sellerId(), null, closed, drawers,
-                saleReportRepository.salesBySeller(period), saleReportRepository.cancellationsBySeller(period));
+                saleReportRepository.salesBySeller(period), saleReportRepository.cancellationsBySeller(period),
+                viewer.isManager());
     }
 
     // Sellers only get a drawer they're in (404 otherwise), once it is closed.
@@ -177,12 +182,12 @@ public class SaleReportService {
         }
         return cashClosing(drawer.businessDate(), zone, null, drawerId, closed, List.of(drawer),
                 saleReportRepository.drawerSalesBySeller(drawerId),
-                saleReportRepository.drawerCancellationsBySeller(drawerId));
+                saleReportRepository.drawerCancellationsBySeller(drawerId), viewer.isManager());
     }
 
-    private static CashClosingResponse cashClosing(LocalDate day, ZoneId zone, Long sellerId, Long drawerId,
+    private CashClosingResponse cashClosing(LocalDate day, ZoneId zone, Long sellerId, Long drawerId,
             boolean closed, List<CashDrawerResponse> drawers, List<SellerPaymentAmount> sales,
-            List<SellerPaymentAmount> cancellations) {
+            List<SellerPaymentAmount> cancellations, boolean manager) {
         Map<Long, Ref> sellers = new LinkedHashMap<>();
         Map<Long, Map<PaymentMethod, Amounts>> bySellerAndMethod = new HashMap<>();
         sales.forEach(sale -> add(sellers, bySellerAndMethod, sale,
@@ -208,7 +213,9 @@ public class SaleReportService {
                 .toList();
         BigDecimal openingFloat = drawers.stream().map(CashDrawerResponse::openingFloat).reduce(ZERO, BigDecimal::add);
         return new CashClosingResponse(day, zone.getId(), sellerId, drawerId, closed, byPaymentMethod, total,
-                bySeller, openingFloat, openingFloat.add(byPaymentMethod.get(PaymentMethod.CASH).net()), drawers);
+                bySeller, openingFloat, openingFloat.add(byPaymentMethod.get(PaymentMethod.CASH).net()), drawers,
+                // A seller who knew it could keep shortages just under it out of Supervision's alerts.
+                manager ? cashDrawerProperties.unbalancedThreshold() : null);
     }
 
     private static void add(Map<Long, Ref> sellers, Map<Long, Map<PaymentMethod, Amounts>> bySellerAndMethod,

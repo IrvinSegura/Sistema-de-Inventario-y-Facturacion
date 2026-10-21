@@ -1,18 +1,31 @@
 package com.irvin.inventory.stock;
 
+import java.time.Duration;
 import java.time.Instant;
 
 import com.irvin.inventory.common.DateBounds;
 import com.irvin.inventory.common.exception.BadRequestException;
 
-// Stock ledger filters for one product; null type and dates are ignored. The date range is [from, to).
-// Validated on construction, so a bad range fails before any transaction or query.
+// Stock ledger filters: one product's ledger (type and dates optional), or one type across the store
+// over a period of up to MAX_STORE_WIDE_DAYS. The date range is [from, to).
+// Validated on construction, so a bad search fails before any transaction or query.
 public record InventoryMovementSearch(Long productId, MovementType type, Instant from, Instant to) {
 
+    // Like the reports' periods: bounds the rows a store-wide page and its count read.
+    static final int MAX_STORE_WIDE_DAYS = 366;
+    // Calendar days between the store's midnights: a span across the end of daylight saving time is
+    // an hour longer, so a full 366-day range must still pass.
+    private static final Duration MAX_STORE_WIDE_SPAN = Duration.ofDays(MAX_STORE_WIDE_DAYS).plusHours(1);
+
     public InventoryMovementSearch {
-        DateBounds.requireWithin(from, to);
-        if (from != null && to != null && !from.isBefore(to)) {
-            throw new BadRequestException("'from' must be before 'to'");
+        DateBounds.requireRange(from, to, "from", "to");
+        if (productId == null) {
+            if (type == null || from == null || to == null) {
+                throw new BadRequestException("Send a productId, or a type with 'from' and 'to'");
+            }
+            if (Duration.between(from, to).compareTo(MAX_STORE_WIDE_SPAN) > 0) {
+                throw new BadRequestException("A store-wide search can't exceed " + MAX_STORE_WIDE_DAYS + " days");
+            }
         }
     }
 }

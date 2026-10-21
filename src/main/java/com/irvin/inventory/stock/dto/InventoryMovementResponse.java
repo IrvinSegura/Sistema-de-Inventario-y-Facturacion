@@ -7,6 +7,8 @@ import com.irvin.inventory.stock.MovementType;
 public record InventoryMovementResponse(
         Long id,
         Long productId,
+        // For store-wide lists.
+        String productName,
         MovementType type,
         // Positive = in, negative = out.
         int quantity,

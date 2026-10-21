@@ -1,8 +1,14 @@
 package com.irvin.inventory.stock;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
 
 import com.irvin.inventory.AbstractIntegrationTest;
 import com.jayway.jsonpath.JsonPath;
@@ -73,6 +79,45 @@ class InventoryMovementControllerIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void typeAloneListsThatTypeAcrossTheStoreNewestFirst() throws Exception {
+        String token = adminAccessToken();
+        Long first = createPricedProduct("1", "0");
+        Long second = createPricedProduct("1", "0");
+        addStock(first, 5);
+        addStock(second, 5);
+        String from = JsonPath.read(adjust(first, -1, "Damaged", token), "$.movementDate");
+        adjust(second, -2, "Expired", token);
+        String secondName = jdbcTemplate.queryForObject("SELECT name FROM product WHERE id = ?", String.class, second);
+
+        String to = Instant.now().plus(1, ChronoUnit.HOURS).toString();
+
+        // Other tests may adjust stock at the same time, so look for these two rather than count them.
+        String body = mockMvc.perform(withToken(get(MOVEMENTS)
+                        .queryParam("type", "ADJUSTMENT")
+                        .queryParam("from", from)
+                        .queryParam("to", to)
+                        .queryParam("size", "100"), token))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        List<Integer> products = JsonPath.read(body, "$.content[*].productId");
+        assertThat(JsonPath.<List<String>>read(body, "$.content[*].type")).containsOnly("ADJUSTMENT");
+        assertThat(products).contains(first.intValue(), second.intValue());
+        assertThat(products.indexOf(second.intValue())).isLessThan(products.indexOf(first.intValue()));
+        assertThat(JsonPath.<List<String>>read(body, "$.content[?(@.productId == %d)].productName".formatted(second)))
+                .containsExactly(secondName);
+        // A second page forces the count query, which runs without the product filter here.
+        mockMvc.perform(withToken(get(MOVEMENTS)
+                        .queryParam("type", "ADJUSTMENT")
+                        .queryParam("from", from)
+                        .queryParam("to", to)
+                        .queryParam("size", "1")
+                        .queryParam("page", "1"), token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.page.totalElements").value(greaterThanOrEqualTo(2)));
+    }
+
+    @Test
     void dateRangeIncludesFromAndExcludesTo() throws Exception {
         String token = adminAccessToken();
         Long product = createPricedProduct("1", "0");
@@ -99,7 +144,19 @@ class InventoryMovementControllerIT extends AbstractIntegrationTest {
         Long product = createPricedProduct("1", "0");
         String url = MOVEMENTS + "?productId=" + product;
 
-        getJson(MOVEMENTS, token).andExpect(status().isBadRequest());
+        getJson(MOVEMENTS, token)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Send a productId, or a type with 'from' and 'to'"));
+        // Store-wide: a type and a period of up to 366 days.
+        getJson(MOVEMENTS + "?type=ADJUSTMENT", token).andExpect(status().isBadRequest());
+        getJson(MOVEMENTS + "?type=ADJUSTMENT&from=2025-01-01T00:00:00Z", token).andExpect(status().isBadRequest());
+        getJson(MOVEMENTS + "?from=2025-01-01T00:00:00Z&to=2025-02-01T00:00:00Z", token)
+                .andExpect(status().isBadRequest());
+        getJson(MOVEMENTS + "?type=ADJUSTMENT&from=2025-01-01T00:00:00Z&to=2026-01-03T00:00:00Z", token)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("A store-wide search can't exceed 366 days"));
+        getJson(MOVEMENTS + "?type=ADJUSTMENT&from=2025-01-01T00:00:00Z&to=2026-01-02T00:00:00Z", token)
+                .andExpect(status().isOk());
         getJson(MOVEMENTS + "?productId=999999", token)
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.detail").value("Product not found: 999999"));
