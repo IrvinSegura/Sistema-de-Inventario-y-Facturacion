@@ -90,6 +90,8 @@ erDiagram
         varchar email
         varchar phone
         varchar address
+        varchar fiscal_postal_code "with tax_id and tax_regime, or none (V15)"
+        varchar tax_regime "SAT c_RegimenFiscal code (V15)"
         boolean active
         bigint version "optimistic lock (V6)"
         timestamptz created_at
@@ -206,7 +208,7 @@ erDiagram
 | Idempotency: transaction-scoped advisory lock on `scope:key`, then lookup; same key with a different payload → 409 | Concurrent retries (double click) record exactly one document. |
 | `idempotency_key` on sale (required, V7) and purchase (optional) | A double click or retry returns the existing document instead of creating a duplicate. Double clicks are common at the checkout; purchases are recorded only by admins. A sale key reused by another seller is a 409, so it never reveals their sale. |
 | Atomic cancellation (`UPDATE sale SET status = 'CANCELLED', cancelled_at, cancelled_by, cancellation_reason WHERE id = :id AND status = 'COMPLETED'`) + unique index per (sale, product, type) | Concurrent cancellations can't return stock twice; who, when and why is always recorded (enforced by `ck_sale_status`). |
-| Only ADMIN changes a customer's tax ID or `active` flag (403 for sellers) | Sales reference the customer, so past receipts show its current tax ID; deactivating it blocks every checkout. Sellers still register customers and fix contact data. |
+| Only managers (ADMIN or SUPERVISOR) change a customer's tax ID or `active` flag (403 for sellers) | Sales reference the customer, so past receipts show its current tax ID; deactivating it blocks every checkout. Sellers still register customers and fix contact data. |
 | Cancellation returns stock even to products deactivated after the sale | The goods are physically back on the shelf; the product just can't be sold until it's reactivated. |
 | `barcode` (optional, unique, 8-14 digits) separate from `sku` | Grocery items are sold by scanning; `sku` stays as the internal code, also for unlabeled items. |
 | `image_url` only; images live in object storage (Cloudinary/S3) | Binary files bloat and slow down the DB. |
