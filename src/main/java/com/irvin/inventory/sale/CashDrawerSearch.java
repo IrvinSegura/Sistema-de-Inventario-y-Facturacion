@@ -11,10 +11,10 @@ import jakarta.persistence.criteria.Root;
 import jakarta.persistence.criteria.Subquery;
 import org.springframework.data.jpa.domain.Specification;
 
-// Cash drawer filters; null values are ignored. sellerId matches any member of the drawer.
-// Business dates are inclusive local days.
+// Cash drawer filters; null values are ignored. sellerId matches any member of the drawer; open is
+// true for drawers still open, false for closed ones. Business dates are inclusive local days.
 // Validated on construction, so a bad range fails before any transaction or query.
-public record CashDrawerSearch(Long sellerId, LocalDate from, LocalDate to) {
+public record CashDrawerSearch(Long sellerId, LocalDate from, LocalDate to, Boolean open) {
 
     public CashDrawerSearch {
         DateBounds.requireWithin(from, to);
@@ -25,7 +25,7 @@ public record CashDrawerSearch(Long sellerId, LocalDate from, LocalDate to) {
 
     // Sellers only see the drawers they're in, whatever seller filter they sent.
     CashDrawerSearch withSeller(Long sellerId) {
-        return new CashDrawerSearch(sellerId, from, to);
+        return new CashDrawerSearch(sellerId, from, to, open);
     }
 
     Specification<CashDrawer> toSpecification() {
@@ -43,6 +43,9 @@ public record CashDrawerSearch(Long sellerId, LocalDate from, LocalDate to) {
             }
             if (to != null) {
                 predicates.add(cb.lessThanOrEqualTo(root.get("businessDate"), to));
+            }
+            if (open != null) {
+                predicates.add(open ? cb.isNull(root.get("closedAt")) : cb.isNotNull(root.get("closedAt")));
             }
             return cb.and(predicates.toArray(Predicate[]::new));
         };

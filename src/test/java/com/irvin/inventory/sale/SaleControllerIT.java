@@ -535,6 +535,82 @@ class SaleControllerIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void listShowsCancellationsAndFiltersByCancellationDate() throws Exception {
+        String adminToken = adminAccessToken();
+        CreatedUser seller = createSeller();
+        String sellerToken = sellerToken(seller);
+        Long product = createPricedProduct("1", "0");
+        addStock(product, 2);
+        Long kept = readId(sell(saleBody(product, 1), sellerToken).andExpect(status().isCreated()));
+        Long cancelled = readId(sell(saleBody(product, 1), sellerToken).andExpect(status().isCreated()));
+        String body = postJson("/api/v1/sales/" + cancelled + "/cancellation", cancelBody("Wrong product"), adminToken)
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String cancelledAt = JsonPath.read(body, "$.cancellation.cancelledAt");
+
+        getJson("/api/v1/sales?sellerId=" + seller.id() + "&sort=saleDate,asc", adminToken)
+                .andExpect(jsonPath("$.content.length()").value(2))
+                .andExpect(jsonPath("$.content[0].id").value(kept))
+                .andExpect(jsonPath("$.content[0].cancellation").doesNotExist())
+                .andExpect(jsonPath("$.content[1].id").value(cancelled))
+                .andExpect(jsonPath("$.content[1].cancellation.reason").value("Wrong product"))
+                .andExpect(jsonPath("$.content[1].cancellation.cancelledAt").value(cancelledAt))
+                .andExpect(jsonPath("$.content[1].cancellation.cancelledBy.name").exists());
+        // [cancelledFrom, cancelledTo) on the cancellation date; sales never cancelled don't match.
+        mockMvc.perform(withToken(get("/api/v1/sales")
+                        .queryParam("sellerId", seller.id().toString())
+                        .queryParam("cancelledFrom", cancelledAt)
+                        .queryParam("sort", "cancelledAt,desc"), adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].id").value(cancelled));
+        mockMvc.perform(withToken(get("/api/v1/sales")
+                        .queryParam("sellerId", seller.id().toString())
+                        .queryParam("cancelledTo", cancelledAt), adminToken))
+                .andExpect(jsonPath("$.content.length()").value(0));
+    }
+
+    @Test
+    void sellersFilterTheirOwnCancellationsOnly() throws Exception {
+        String adminToken = adminAccessToken();
+        CreatedUser seller = createSeller();
+        CreatedUser other = createSeller();
+        String sellerToken = sellerToken(seller);
+        Long product = createPricedProduct("1", "0");
+        addStock(product, 2);
+        Long own = readId(sell(saleBody(product, 1), sellerToken).andExpect(status().isCreated()));
+        Long others = readId(sell(saleBody(product, 1), sellerToken(other)).andExpect(status().isCreated()));
+        String body = postJson("/api/v1/sales/" + own + "/cancellation", cancelBody("Wrong product"), adminToken)
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        postJson("/api/v1/sales/" + others + "/cancellation", cancelBody("Wrong product"), adminToken)
+                .andExpect(status().isOk());
+        String cancelledAt = JsonPath.read(body, "$.cancellation.cancelledAt");
+
+        // The sellerId filter can't widen a seller's view, with cancellation filters too.
+        mockMvc.perform(withToken(get("/api/v1/sales")
+                        .queryParam("sellerId", other.id().toString())
+                        .queryParam("cancelledFrom", cancelledAt), sellerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].id").value(own))
+                .andExpect(jsonPath("$.content[0].cancellation.reason").value("Wrong product"));
+    }
+
+    @Test
+    void sortingByCancellationDateNeedsCancelledSalesOnly() throws Exception {
+        String token = adminAccessToken();
+
+        getJson("/api/v1/sales?sort=cancelledAt,desc", token)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value(
+                        "Sorting by cancelledAt needs status=CANCELLED or a cancellation date range"));
+        getJson("/api/v1/sales?status=CANCELLED&sort=cancelledAt,desc", token).andExpect(status().isOk());
+        getJson("/api/v1/sales?cancelledFrom=2025-01-01T00:00:00Z&sort=cancelledAt", token)
+                .andExpect(status().isOk());
+    }
+
+    @Test
     void invalidDateRangesAreRejected() throws Exception {
         String token = adminAccessToken();
 
@@ -549,6 +625,12 @@ class SaleControllerIT extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.detail").value(
                         "Dates must be between 2000-01-01T00:00:00Z and 9999-12-30T00:00:00Z"));
         getJson("/api/v1/sales?from=1999-12-31T00:00:00Z", token).andExpect(status().isBadRequest());
+        getJson("/api/v1/sales?cancelledFrom=2025-02-01T00:00:00Z&cancelledTo=2025-01-01T00:00:00Z", token)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("'cancelledFrom' must be before 'cancelledTo'"));
+        getJson("/api/v1/sales?cancelledFrom=2025-01-01T00:00:00Z&cancelledTo=2025-01-01T00:00:00Z", token)
+                .andExpect(status().isBadRequest());
+        getJson("/api/v1/sales?cancelledTo=1999-12-31T00:00:00Z", token).andExpect(status().isBadRequest());
     }
 
     // [quantity, resulting_stock] of the movement.

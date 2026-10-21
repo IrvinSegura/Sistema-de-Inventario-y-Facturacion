@@ -23,6 +23,8 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class StockService {
 
+    private static final int SEARCH_TIMEOUT_SECONDS = 10;
+
     private static final String IDEMPOTENCY_SCOPE = "stock-adjustment";
 
     private final InventoryMovementRepository inventoryMovementRepository;
@@ -60,12 +62,13 @@ public class StockService {
         return new AdjustmentResult(inventoryMovementQueryRepository.findById(movementId).orElseThrow(), true);
     }
 
-    // 404 rather than an empty page: productId is required and identifies the ledger being read.
+    // 404 rather than an empty page when a productId names no product: it identifies the ledger being read.
     // One REPEATABLE READ snapshot, so the page and its total count agree while sales come in.
-    // Client sort is dropped: a ledger only makes sense in time order.
-    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    // Client sort is dropped: a ledger only makes sense in time order. The timeout (a statement timeout
+    // through JdbcTemplate) keeps a slow read from holding a connection the checkout needs, like the reports.
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ, timeout = SEARCH_TIMEOUT_SECONDS)
     public Page<InventoryMovementResponse> search(InventoryMovementSearch search, Pageable pageable) {
-        if (!productRepository.existsById(search.productId())) {
+        if (search.productId() != null && !productRepository.existsById(search.productId())) {
             throw new NotFoundException("Product not found: " + search.productId());
         }
         Pageable unsorted = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize());

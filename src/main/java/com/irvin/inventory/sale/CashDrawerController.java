@@ -90,9 +90,12 @@ public class CashDrawerController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @Parameter(description = "Last business day (inclusive), e.g. 2026-10-31")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @Parameter(description = "true: only drawers still open; false: only closed ones; all when omitted")
+            @RequestParam(required = false) Boolean open,
             @ParameterObject Pageable pageable,
             @AuthenticationPrincipal Jwt jwt) {
-        return cashDrawerService.search(new CashDrawerSearch(sellerId, from, to), pageable, CurrentUser.from(jwt));
+        return cashDrawerService.search(new CashDrawerSearch(sellerId, from, to, open), pageable,
+                CurrentUser.from(jwt));
     }
 
     @Operation(summary = "Get a cash drawer", description = "Sellers get 404 for drawers they aren't in.")

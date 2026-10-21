@@ -32,13 +32,16 @@ public class InventoryMovementController {
 
     private final StockService stockService;
 
-    @Operation(summary = "Stock ledger of a product, newest first",
-            description = "Every purchase, sale, cancellation and adjustment with the resulting stock. "
-                    + "The sort parameter is ignored. When paging through a busy product, send the 'to' of the "
-                    + "first request on every page so new movements don't shift the pages.")
+    @Operation(summary = "Stock ledger of a product, or one type of movement across the store, newest first",
+            description = "Every purchase, sale, cancellation and adjustment with the resulting stock. Send a "
+                    + "productId, or a type with 'from' and 'to' (up to 366 days) to list the whole store, e.g. every "
+                    + "adjustment of a month; 400 otherwise. The sort parameter is ignored. When paging through a busy "
+                    + "ledger, send the 'to' of the first request on every page so new movements don't shift the pages.")
     @GetMapping
     public Page<InventoryMovementResponse> search(
-            @RequestParam Long productId,
+            @Parameter(description = "Required unless type is sent")
+            @RequestParam(required = false) Long productId,
+            @Parameter(description = "Required, with from and to, unless productId is sent")
             @RequestParam(required = false) MovementType type,
             @Parameter(description = "Inclusive, ISO-8601 instant")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,

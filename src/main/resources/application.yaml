@@ -74,6 +74,9 @@ app:
   store:
     # Calendar days in reports ("sales on Oct 1") follow the store's local time.
     time-zone: America/Mexico_City
+  cash-drawer:
+    # Pesos either way; the web's Supervision alerts on closed drawers off by at least this much.
+    unbalanced-threshold: ${CASH_DRAWER_UNBALANCED_THRESHOLD:50.00}
   password-reset:
     code-ttl: 10m
     max-attempts: 5
