@@ -87,6 +87,7 @@ single instance; scaling out needs a shared store for the limits.
 | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` | Twilio for password reset codes by SMS (optional; number in E.164) |
 | `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | Cloudinary for product images (required for uploads in `prod`; elsewhere images go to `uploads/images`) |
 | `IMAGES_BASE_URL` | Public URL of the local images folder (default `http://localhost:8080/images`; not used with Cloudinary) |
+| `CASH_DRAWER_UNBALANCED_THRESHOLD` | Pesos of shortage or surplus from which a closed drawer counts as unbalanced in the cash closing (default `50.00`) |
 
 Without SMTP or Twilio settings, reset codes for that channel aren't sent; outside `prod` they are written to the log so the flow can be tried locally.
 Without Cloudinary settings, image uploads answer 503 in `prod` (Render's disk is wiped on every deploy).
