@@ -10,7 +10,7 @@ import org.springframework.data.jpa.domain.Specification;
 
 // Purchase filters; null values are ignored. The date range is [from, to).
 // Validated on construction, so a bad range fails before any transaction or query.
-public record PurchaseSearch(Long supplierId, Instant from, Instant to) {
+public record PurchaseSearch(Long supplierId, PurchaseStatus status, Instant from, Instant to) {
 
     public PurchaseSearch {
         DateBounds.requireRange(from, to, "from", "to");
@@ -21,6 +21,9 @@ public record PurchaseSearch(Long supplierId, Instant from, Instant to) {
             List<Predicate> predicates = new ArrayList<>();
             if (supplierId != null) {
                 predicates.add(cb.equal(root.get("supplier").get("id"), supplierId));
+            }
+            if (status != null) {
+                predicates.add(cb.equal(root.get("status"), status));
             }
             if (from != null) {
                 predicates.add(cb.greaterThanOrEqualTo(root.get("purchaseDate"), from));

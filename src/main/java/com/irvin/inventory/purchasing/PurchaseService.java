@@ -3,6 +3,7 @@ package com.irvin.inventory.purchasing;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
+import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.List;
@@ -19,6 +20,7 @@ import com.irvin.inventory.common.Sorting;
 import com.irvin.inventory.common.exception.BadRequestException;
 import com.irvin.inventory.common.exception.ConflictException;
 import com.irvin.inventory.common.exception.NotFoundException;
+import com.irvin.inventory.purchasing.dto.CancelPurchaseRequest;
 import com.irvin.inventory.purchasing.dto.CreatePurchaseRequest;
 import com.irvin.inventory.purchasing.dto.PurchaseResponse;
 import com.irvin.inventory.purchasing.dto.PurchaseSummaryResponse;
@@ -31,7 +33,8 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-// Lock order: idempotency key -> supplier (FOR SHARE) -> product rows by id.
+// Lock order: idempotency key -> supplier (FOR SHARE) -> product rows by id; a cancellation locks its
+// purchase row, then product rows by id.
 @Service
 @RequiredArgsConstructor
 public class PurchaseService {
@@ -43,6 +46,7 @@ public class PurchaseService {
             "id", "id",
             "purchaseDate", "purchaseDate",
             "total", "total",
+            "status", "status",
             "supplier", "supplier.name",
             "recordedBy", "user.name");
     // Largest value of NUMERIC(12,2).
@@ -121,6 +125,28 @@ public class PurchaseService {
         return new CreateResult(PurchaseResponse.from(purchase), true);
     }
 
+    // Status change first: a concurrent cancellation updates no rows and never touches stock. Then the
+    // units leave by product id, in the same order as purchases and sales; if any product has fewer units
+    // left than the purchase brought (already sold), the whole cancellation rolls back.
+    @Transactional
+    public PurchaseResponse cancel(Long id, CancelPurchaseRequest request, Long userId) {
+        Instant cancelledAt = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        if (purchaseRepository.cancel(id, cancelledAt, userId, request.reason()) == 0) {
+            throw purchaseRepository.existsById(id)
+                    ? new ConflictException("Purchase is already cancelled")
+                    : notFound();
+        }
+        Purchase purchase = purchaseRepository.findDetailedById(id).orElseThrow(PurchaseService::notFound);
+        purchase.getItems().stream()
+                .sorted(Comparator.comparing(item -> item.getProduct().getId()))
+                .forEach(item -> inventoryMovementRepository
+                        .recordPurchaseCancellation(item.getProduct().getId(), item.getQuantity(),
+                                item.getUnitCost(), id, userId)
+                        .orElseThrow(() -> new ConflictException(
+                                "Insufficient stock for product: " + item.getProduct().getId())));
+        return PurchaseResponse.from(purchase);
+    }
+
     @Transactional(readOnly = true)
     public Page<PurchaseSummaryResponse> search(PurchaseSearch search, Pageable pageable) {
         Pageable sorted = Sorting.apply(pageable, SORTABLE, DEFAULT_SORT);
@@ -129,8 +155,11 @@ public class PurchaseService {
 
     @Transactional(readOnly = true)
     public PurchaseResponse findById(Long id) {
-        return PurchaseResponse.from(
-                purchaseRepository.findDetailedById(id).orElseThrow(() -> new NotFoundException("Purchase not found")));
+        return PurchaseResponse.from(purchaseRepository.findDetailedById(id).orElseThrow(PurchaseService::notFound));
+    }
+
+    private static NotFoundException notFound() {
+        return new NotFoundException("Purchase not found");
     }
 
     private static void ensureNoDuplicateProducts(CreatePurchaseRequest request) {
