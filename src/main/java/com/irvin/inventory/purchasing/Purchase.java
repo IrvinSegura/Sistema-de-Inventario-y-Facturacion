@@ -10,6 +10,8 @@ import com.irvin.inventory.user.User;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -18,11 +20,12 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.OrderBy;
+import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-// Immutable once recorded: purchases are never edited or deleted.
+// Never edited or deleted once recorded; it can only be cancelled.
 @Entity
 @Getter
 @Setter
@@ -46,6 +49,25 @@ public class Purchase {
 
     @Column(nullable = false, precision = 12, scale = 2)
     private BigDecimal total;
+
+    // Status and cancellation data change only through the atomic UPDATE in PurchaseRepository.cancel.
+    @Setter(AccessLevel.NONE)
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20, updatable = false)
+    private PurchaseStatus status = PurchaseStatus.COMPLETED;
+
+    @Setter(AccessLevel.NONE)
+    @Column(updatable = false)
+    private Instant cancelledAt;
+
+    @Setter(AccessLevel.NONE)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "cancelled_by", updatable = false)
+    private User cancelledBy;
+
+    @Setter(AccessLevel.NONE)
+    @Column(updatable = false)
+    private String cancellationReason;
 
     private UUID idempotencyKey;
 
