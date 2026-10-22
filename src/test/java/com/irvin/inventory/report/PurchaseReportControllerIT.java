@@ -58,6 +58,30 @@ class PurchaseReportControllerIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void leavesCancelledPurchasesOut() throws Exception {
+        Long rice = createPricedProduct("20", "0");
+        Long supplier = createSupplier();
+        Long kept = purchase(supplier, """
+                [{"productId": %d, "quantity": 2, "unitCost": 3}]
+                """.formatted(rice));
+        Long cancelled = purchase(supplier, """
+                [{"productId": %d, "quantity": 5, "unitCost": 4}]
+                """.formatted(rice));
+        postJson("/api/v1/purchases/" + cancelled + "/cancellation", """
+                {"reason": "Wrong supplier"}
+                """, adminAccessToken()).andExpect(status().isOk());
+        LocalDate day = moveToUnusedDay(kept, cancelled);
+
+        getJson("/api/v1/purchase-reports?from=" + day + "&to=" + day, adminAccessToken())
+                .andExpect(jsonPath("$.purchaseCount").value(1))
+                .andExpect(jsonPath("$.units").value(2))
+                .andExpect(jsonPath("$.total").value(6.0))
+                .andExpect(jsonPath("$.bySupplier[0].purchaseCount").value(1))
+                .andExpect(jsonPath("$.topProducts[0].quantity").value(2))
+                .andExpect(jsonPath("$.byDay[0].purchaseCount").value(1));
+    }
+
+    @Test
     void isForManagersAndValidatesThePeriod() throws Exception {
         getJson("/api/v1/purchase-reports?from=2026-01-01&to=2026-01-31", sellerToken())
                 .andExpect(status().isForbidden());

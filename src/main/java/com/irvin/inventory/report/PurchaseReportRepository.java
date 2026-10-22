@@ -28,11 +28,13 @@ public class PurchaseReportRepository {
     private final NamedParameterJdbcTemplate jdbcTemplate;
 
     // Local days [from, toExclusive) in the store's zone, optionally from one supplier. Same bounds rule
-    // as SaleReportRepository.Period: PostgreSQL converts the bounds and each row's day alike.
+    // as SaleReportRepository.Period: PostgreSQL converts the bounds and each row's day alike. Cancelled
+    // purchases are left out: their units went back to the supplier.
     public record Period(LocalDate from, LocalDate toExclusive, ZoneId zone, Long supplierId) {
 
         String where() {
-            return " WHERE pu.purchase_date >= CAST(:from AS timestamp) AT TIME ZONE :zone"
+            return " WHERE pu.status = 'COMPLETED'"
+                    + " AND pu.purchase_date >= CAST(:from AS timestamp) AT TIME ZONE :zone"
                     + " AND pu.purchase_date < CAST(:toExclusive AS timestamp) AT TIME ZONE :zone"
                     + (supplierId == null ? "" : " AND pu.supplier_id = :supplierId");
         }
