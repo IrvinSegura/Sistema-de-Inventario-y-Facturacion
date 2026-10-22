@@ -27,6 +27,15 @@ public final class DateBounds {
         }
     }
 
+    // Throws 400 if an end is out of range or [from, to) is empty; nulls (optional filters) are ignored.
+    // The names are the query parameters, for the message.
+    public static void requireRange(Instant from, Instant to, String fromName, String toName) {
+        requireWithin(from, to);
+        if (from != null && to != null && !from.isBefore(to)) {
+            throw new BadRequestException("'" + fromName + "' must be before '" + toName + "'");
+        }
+    }
+
     // Throws 400 if any instant is out of range; nulls (optional filters) are ignored.
     public static void requireWithin(Instant... instants) {
         for (Instant instant : instants) {

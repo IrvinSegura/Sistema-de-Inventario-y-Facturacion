@@ -73,10 +73,14 @@ public class SaleController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
             @Parameter(description = "Exclusive, ISO-8601 instant")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
+            @Parameter(description = "Cancelled at or after this ISO-8601 instant (only cancelled sales match)")
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant cancelledFrom,
+            @Parameter(description = "Cancelled before this ISO-8601 instant (only cancelled sales match)")
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant cancelledTo,
             @ParameterObject Pageable pageable,
             @AuthenticationPrincipal Jwt jwt) {
-        return saleService.search(new SaleSearch(saleNumber, customerId, sellerId, cashDrawerId, status, from, to),
-                pageable, CurrentUser.from(jwt));
+        return saleService.search(new SaleSearch(saleNumber, customerId, sellerId, cashDrawerId, status, from, to,
+                cancelledFrom, cancelledTo), pageable, CurrentUser.from(jwt));
     }
 
     @Operation(summary = "Get a sale with its items")

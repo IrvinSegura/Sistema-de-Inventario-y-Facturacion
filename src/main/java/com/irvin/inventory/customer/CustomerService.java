@@ -85,11 +85,12 @@ public class CustomerService {
         boolean sensitiveChange = !Objects.equals(customer.getTaxId(), request.taxId())
                 || customer.isActive() != request.active();
         if (sensitiveChange && !editor.isManager()) {
-            throw new ForbiddenException("Only an admin can change a customer's tax ID or active status");
+            throw new ForbiddenException("Only a manager can change a customer's tax ID or active status");
         }
         if (request.taxId() != null && customerRepository.existsByTaxIdAndIdNot(request.taxId(), id)) {
             throw duplicateTaxId();
         }
+        // Keep in step with changesOnlyActiveFlag.
         customer.setName(request.name());
         customer.setTaxId(request.taxId());
         customer.setEmail(request.email());

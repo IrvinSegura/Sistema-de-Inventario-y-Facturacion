@@ -12,6 +12,11 @@ spring:
     hikari:
       # Fail fast (SQLSTATE 55P03) instead of holding a pool connection on a locked row.
       connection-init-sql: "SET lock_timeout = '5s'"
+  flyway:
+    postgresql:
+      # Session advisory lock instead of a transactional one: that keeps a transaction open while
+      # migrating, and CREATE INDEX CONCURRENTLY (non-transactional migrations) would wait for it forever.
+      transactional-lock: false
   jpa:
     hibernate:
       # Flyway owns the schema; Hibernate only validates it.
@@ -60,6 +65,8 @@ app:
     secret: ${JWT_SECRET}
     access-token-ttl: 15m
     refresh-token-ttl: 7d
+    # Sign in again this long after logging in, however often the session refreshed.
+    max-session-age: ${JWT_MAX_SESSION_AGE:7d}
   admin:
     email: ${ADMIN_EMAIL:}
     password: ${ADMIN_PASSWORD:}
@@ -69,6 +76,9 @@ app:
   store:
     # Calendar days in reports ("sales on Oct 1") follow the store's local time.
     time-zone: America/Mexico_City
+  cash-drawer:
+    # Pesos either way; the web's Supervision alerts on closed drawers off by at least this much.
+    unbalanced-threshold: ${CASH_DRAWER_UNBALANCED_THRESHOLD:50.00}
   password-reset:
     code-ttl: 10m
     max-attempts: 5

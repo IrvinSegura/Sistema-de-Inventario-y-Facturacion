@@ -230,6 +230,25 @@ class CashDrawerControllerIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void theListFiltersOpenOrClosedDrawers() throws Exception {
+        String adminToken = adminAccessToken();
+        CreatedUser seller = createSeller();
+        LocalDate yesterday = today().minusDays(1);
+        Long closed = insertDrawer(seller.id(), yesterday.minusDays(1), "100", false);
+        Long open = insertDrawer(seller.id(), yesterday, "200", true);
+        String drawers = CASH_DRAWERS + "?sellerId=" + seller.id() + "&from=" + yesterday.minusDays(1) + "&to=" + yesterday;
+
+        getJson(drawers + "&open=true", adminToken)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.page.totalElements").value(1))
+                .andExpect(jsonPath("$.content[0].id").value(open));
+        getJson(drawers + "&open=false", adminToken)
+                .andExpect(jsonPath("$.page.totalElements").value(1))
+                .andExpect(jsonPath("$.content[0].id").value(closed));
+        getJson(drawers, adminToken).andExpect(jsonPath("$.page.totalElements").value(2));
+    }
+
+    @Test
     void invalidRequestsAreRejected() throws Exception {
         String token = loginOk(createSeller().email(), DEFAULT_PASSWORD).accessToken();
 

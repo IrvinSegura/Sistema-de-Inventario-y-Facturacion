@@ -29,6 +29,15 @@ public record SaleResponse(
     }
 
     public record Cancellation(Instant cancelledAt, Ref cancelledBy, String reason) {
+
+        // Null unless the sale is cancelled; needs cancelledBy loaded.
+        static Cancellation from(Sale sale) {
+            return sale.getStatus() == SaleStatus.CANCELLED
+                    ? new Cancellation(sale.getCancelledAt(),
+                            new Ref(sale.getCancelledBy().getId(), sale.getCancelledBy().getName()),
+                            sale.getCancellationReason())
+                    : null;
+        }
     }
 
     // Explicit name: springdoc names nested records by simple name, and four of them are "Item".
@@ -44,11 +53,6 @@ public record SaleResponse(
     }
 
     public static SaleResponse from(Sale sale) {
-        Cancellation cancellation = sale.getStatus() == SaleStatus.CANCELLED
-                ? new Cancellation(sale.getCancelledAt(),
-                        new Ref(sale.getCancelledBy().getId(), sale.getCancelledBy().getName()),
-                        sale.getCancellationReason())
-                : null;
         return new SaleResponse(
                 sale.getId(),
                 sale.getSaleNumber(),
@@ -60,7 +64,7 @@ public record SaleResponse(
                 sale.getSubtotal(),
                 sale.getTax(),
                 sale.getTotal(),
-                cancellation,
+                Cancellation.from(sale),
                 sale.getItems().stream().map(Item::from).toList());
     }
 }

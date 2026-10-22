@@ -19,15 +19,17 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 // Read side of the stock ledger; writes go only through InventoryMovementRepository.
-// Per-product reads use ix_inventory_movement_product_date (product_id, movement_date).
+// Per-product reads use ix_inventory_movement_product_date (product_id, movement_date); store-wide
+// reads by type use ix_inventory_movement_type_date (type, movement_date).
 @Repository
 @RequiredArgsConstructor
 public class InventoryMovementQueryRepository {
 
     private static final String SELECT_MOVEMENT = """
-            SELECT m.id, m.product_id, m.type, m.quantity, m.resulting_stock, m.reason,
+            SELECT m.id, m.product_id, p.name AS product_name, m.type, m.quantity, m.resulting_stock, m.reason,
                    m.purchase_id, m.sale_id, s.sale_number, u.id AS user_id, u.name AS user_name, m.movement_date
             FROM inventory_movement m
+            JOIN product p ON p.id = m.product_id
             JOIN app_user u ON u.id = m.user_id
             LEFT JOIN sale s ON s.id = m.sale_id""";
 
@@ -37,8 +39,13 @@ public class InventoryMovementQueryRepository {
     public Page<InventoryMovementResponse> search(InventoryMovementSearch search, Pageable pageable) {
         // Conditions may only reference "m": the count query below has no joins.
         // Optional conditions are fixed SQL text; values always go as parameters.
-        StringBuilder where = new StringBuilder(" WHERE m.product_id = :productId");
-        MapSqlParameterSource params = new MapSqlParameterSource("productId", search.productId());
+        // The search has a productId, or a type and a bounded period (InventoryMovementSearch).
+        StringBuilder where = new StringBuilder(" WHERE TRUE");
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        if (search.productId() != null) {
+            where.append(" AND m.product_id = :productId");
+            params.addValue("productId", search.productId());
+        }
         if (search.type() != null) {
             where.append(" AND m.type = :type");
             params.addValue("type", search.type().name());
@@ -79,6 +86,7 @@ public class InventoryMovementQueryRepository {
         return new InventoryMovementResponse(
                 rs.getLong("id"),
                 rs.getLong("product_id"),
+                rs.getString("product_name"),
                 MovementType.valueOf(rs.getString("type")),
                 rs.getInt("quantity"),
                 rs.getInt("resulting_stock"),

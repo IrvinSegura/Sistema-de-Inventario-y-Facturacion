@@ -21,13 +21,16 @@ import java.util.Map;
 import com.irvin.inventory.common.exception.BadRequestException;
 import com.irvin.inventory.common.exception.ConflictException;
 import com.irvin.inventory.config.StoreProperties;
+import com.irvin.inventory.report.SaleReportRepository.CostTotals;
 import com.irvin.inventory.report.SaleReportRepository.SellerPaymentAmount;
 import com.irvin.inventory.report.dto.CashClosingResponse;
 import com.irvin.inventory.report.dto.CashClosingResponse.Amounts;
 import com.irvin.inventory.report.dto.CashClosingResponse.SellerAmounts;
 import com.irvin.inventory.report.dto.SaleReportResponse;
 import com.irvin.inventory.report.dto.SaleReportResponse.DailyTotal;
+import com.irvin.inventory.report.dto.SaleReportResponse.Profit;
 import com.irvin.inventory.report.dto.SaleReportResponse.Totals;
+import com.irvin.inventory.sale.CashDrawerProperties;
 import com.irvin.inventory.sale.CashDrawerService;
 import com.irvin.inventory.sale.PaymentMethod;
 import com.irvin.inventory.sale.SaleStatus;
@@ -35,6 +38,7 @@ import com.irvin.inventory.sale.dto.CashDrawerResponse;
 import com.irvin.inventory.sale.dto.SaleResponse.Ref;
 import com.irvin.inventory.security.CurrentUser;
 import com.irvin.inventory.user.Role;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -47,12 +51,20 @@ class SaleReportServiceTest {
     private static final LocalDate DAY = LocalDate.of(2026, 3, 10);
     // 03:00 UTC on Mar 11 is still Mar 10 in Mexico City (UTC-6).
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-03-11T03:00:00Z"), ZoneOffset.UTC);
+    private static final CashDrawerProperties CASH_DRAWER_PROPERTIES =
+            new CashDrawerProperties(new BigDecimal("75.00"));
 
     private final SaleReportRepository repository = mock(SaleReportRepository.class);
     private final CashDrawerService cashDrawerService = mock(CashDrawerService.class);
     private final PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
     private final SaleReportService service =
-            new SaleReportService(repository, cashDrawerService, new StoreProperties(ZONE), CLOCK, transactionManager);
+            new SaleReportService(repository, cashDrawerService, new StoreProperties(ZONE), CASH_DRAWER_PROPERTIES,
+                    CLOCK, transactionManager);
+
+    @BeforeEach
+    void noCostedSales() {
+        when(repository.completedCost(any())).thenReturn(new CostTotals(new BigDecimal("0.00"), new BigDecimal("0.00")));
+    }
 
     @Test
     void sellerIsAlwaysScopedToTheirOwnSales() {
@@ -92,6 +104,29 @@ class SaleReportServiceTest {
         assertThat(report.cancelled().saleCount()).isZero();
         assertThat(report.byDay()).extracting(DailyTotal::saleCount).containsExactly(0L, 3L, 0L);
         assertThat(report.byDay().getFirst().total()).isEqualTo(new BigDecimal("0.00"));
+    }
+
+    @Test
+    void grossProfitAndMarginComeFromTheCostedLines() {
+        when(repository.completedCost(any())).thenReturn(new CostTotals(new BigDecimal("300.00"), new BigDecimal("199.99")));
+
+        Profit profit = service.salesReport(DAY, DAY, null, ADMIN).profit();
+
+        assertThat(profit.grossProfit()).isEqualTo(new BigDecimal("100.01"));
+        // 100.01 / 300 = 0.33336... -> 0.3334.
+        assertThat(profit.margin()).isEqualTo(new BigDecimal("0.3334"));
+    }
+
+    @Test
+    void marginIsNullWithoutCostedSales() {
+        assertThat(service.salesReport(DAY, DAY, null, ADMIN).profit().margin()).isNull();
+    }
+
+    @Test
+    void sellersNeverGetCosts() {
+        assertThat(service.salesReport(DAY, DAY, null, SELLER).profit()).isNull();
+
+        verify(repository, never()).completedCost(any());
     }
 
     @Test
@@ -226,6 +261,20 @@ class SaleReportServiceTest {
     }
 
     @Test
+    void cashClosingCarriesTheConfiguredUnbalancedThresholdForManagersOnly() {
+        when(cashDrawerService.findByDay(DAY, SELLER.id())).thenReturn(List.of(drawer(SELLER.id(), "100.00", false)));
+
+        assertThat(service.cashClosing(DAY, null, null, ADMIN).unbalancedThreshold())
+                .isEqualTo(new BigDecimal("75.00"));
+        assertThat(service.cashClosing(DAY, null, null, SELLER).unbalancedThreshold()).isNull();
+    }
+
+    @Test
+    void unbalancedThresholdGetsTwoDecimals() {
+        assertThat(new CashDrawerProperties(new BigDecimal("50")).unbalancedThreshold()).isEqualTo(new BigDecimal("50.00"));
+    }
+
+    @Test
     void sellerGetsTheCashClosingOnlyOnceTheirDrawerIsClosed() {
         when(cashDrawerService.findByDay(DAY, SELLER.id())).thenReturn(List.of(drawer(SELLER.id(), "100.00", true)));
 
@@ -265,7 +314,7 @@ class SaleReportServiceTest {
     }
 
     private SaleReportService serviceAt(String instant) {
-        return new SaleReportService(repository, cashDrawerService, new StoreProperties(ZONE),
+        return new SaleReportService(repository, cashDrawerService, new StoreProperties(ZONE), CASH_DRAWER_PROPERTIES,
                 Clock.fixed(Instant.parse(instant), ZoneOffset.UTC), transactionManager);
     }
 

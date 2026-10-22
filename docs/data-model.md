@@ -62,6 +62,7 @@ erDiagram
         numeric sale_price "pre-tax"
         numeric tax_rate "fraction, usually 0 or 0.16"
         int stock "CHECK >= 0, atomic UPDATE only"
+        numeric average_cost "weighted, 4 decimals, purchases only"
         int min_stock "low-stock alert"
         boolean active
         bigint version "optimistic lock"
@@ -89,6 +90,8 @@ erDiagram
         varchar email
         varchar phone
         varchar address
+        varchar fiscal_postal_code "with tax_id and tax_regime, or none (V15)"
+        varchar tax_regime "SAT c_RegimenFiscal code (V15)"
         boolean active
         bigint version "optimistic lock (V6)"
         timestamptz created_at
@@ -150,6 +153,7 @@ erDiagram
         timestamptz expires_at
         timestamptz revoked_at "set on rotation or logout"
         varchar revocation_reason "ROTATED | LOGOUT | SESSIONS_REVOKED"
+        timestamptz session_started_at "login it descends from (V20)"
         timestamptz created_at
     }
 
@@ -195,6 +199,7 @@ erDiagram
 |---|---|
 | Stock decremented with `UPDATE ... SET stock = stock - :qty WHERE id = :id AND stock >= :qty RETURNING stock`, backed by `CHECK (stock >= 0)` | Two sellers selling the last unit at once: only one succeeds. |
 | `Product.stock` mapped `insertable = false, updatable = false` | Otherwise an admin editing the price could overwrite stock with a stale value and silently undo sales. |
+| `product.average_cost` (weighted average, `NUMERIC(14,4)`, not mapped by JPA) moves in the purchase's stock `UPDATE`: `(stock * average_cost + qty * unit_cost) / (stock + qty)` with the old values, or the new cost when there were no units; sales, cancellations and adjustments leave it as is. `sale_item.unit_cost` is stamped by the sale's stock `UPDATE` (a data-modifying CTE) | Both read and write the cost under the product's row lock, so concurrent purchases and sales never average or snapshot a stale cost. Four decimals keep repeated averaging from drifting. Lines sold before V16, or of products never purchased, keep a `NULL` cost: reports treat it as unknown, never as zero. |
 | `version` on product, category, supplier and customer; clients send the version they loaded | Concurrent catalog edits are detected (409) instead of silently overwritten; doesn't cover stock, so it never conflicts with sales. |
 | Category locked before product: FOR SHARE to assign/activate a product, FOR UPDATE to deactivate | An active product never ends up in an inactive category, even under concurrent edits. |
 | Purchases lock the supplier and sales the customer `FOR SHARE` before any product | The supplier or customer can't be deactivated while a document that uses it is being recorded. |
@@ -203,7 +208,7 @@ erDiagram
 | Idempotency: transaction-scoped advisory lock on `scope:key`, then lookup; same key with a different payload → 409 | Concurrent retries (double click) record exactly one document. |
 | `idempotency_key` on sale (required, V7) and purchase (optional) | A double click or retry returns the existing document instead of creating a duplicate. Double clicks are common at the checkout; purchases are recorded only by admins. A sale key reused by another seller is a 409, so it never reveals their sale. |
 | Atomic cancellation (`UPDATE sale SET status = 'CANCELLED', cancelled_at, cancelled_by, cancellation_reason WHERE id = :id AND status = 'COMPLETED'`) + unique index per (sale, product, type) | Concurrent cancellations can't return stock twice; who, when and why is always recorded (enforced by `ck_sale_status`). |
-| Only ADMIN changes a customer's tax ID or `active` flag (403 for sellers) | Sales reference the customer, so past receipts show its current tax ID; deactivating it blocks every checkout. Sellers still register customers and fix contact data. |
+| Only managers (ADMIN or SUPERVISOR) change a customer's tax ID or `active` flag (403 for sellers) | Sales reference the customer, so past receipts show its current tax ID; deactivating it blocks every checkout. Sellers still register customers and fix contact data. |
 | Cancellation returns stock even to products deactivated after the sale | The goods are physically back on the shelf; the product just can't be sold until it's reactivated. |
 | `barcode` (optional, unique, 8-14 digits) separate from `sku` | Grocery items are sold by scanning; `sku` stays as the internal code, also for unlabeled items. |
 | `image_url` only; images live in object storage (Cloudinary/S3) | Binary files bloat and slow down the DB. |
@@ -212,25 +217,28 @@ erDiagram
 | `sale_number` from a DB sequence, mapped with `@Generated(event = INSERT)` | `MAX()+1` duplicates numbers; `@Generated` reads the value back. |
 | `unit_price` and `tax_rate` copied into `sale_item`, read before the product row is locked | Past sales keep their original price and tax. A price edited at the same instant leaves the sale with the price the checkout saw, which is acceptable. |
 | Seeded grocery categories with `default_tax_rate` (Pantry, Dairy, Bakery 0%; Beverages, Snacks, Cleaning, Personal Care 16%) | Pre-fills the product VAT so classification errors are less likely; each product can still override it. |
-| Refresh tokens stored as SHA-256 hashes, rotated on every use; reuse of a `ROTATED` token revokes all of the user's sessions; expired ones deleted daily | Stolen refresh tokens are detected without logging users out for a stale logged-out token; a DB leak doesn't expose usable tokens. |
+| Refresh tokens stored as SHA-256 hashes, rotated on every use; reuse of a `ROTATED` token revokes all of the user's sessions; expired ones deleted daily. Every rotated token keeps its login's `session_started_at` and expires by `app.jwt.max-session-age` after it at the latest (V20) | Stolen refresh tokens are detected without logging users out for a stale logged-out token; a DB leak doesn't expose usable tokens. Screens that poll the API refresh the session on their own, so without a maximum a browser left signed in would stay signed in forever. |
 | Emails stored lowercase (`CHECK (email = LOWER(email))`) with a plain unique index | Case-insensitive uniqueness and indexed login lookups. |
 | VAT rate per product (`tax_rate`: 0% basic food, 16% general); tax computed and rounded per line (HALF_UP); `sale.tax` = sum of line taxes | Mexican grocery store: sugar or rice pay 0%, soda or snacks 16%. |
 | Money as `NUMERIC(12,2)` / `BigDecimal`; `sale_price` is pre-tax | No floating-point rounding errors; totals computed server-side. |
 | Manual adjustments are signed `ADJUSTMENT` movements (one atomic CTE with `stock + qty >= 0`), allowed on inactive products | Shrinkage, damage and count differences are corrected without ever going negative; discontinued products still need their remaining units written off. |
 | Optional `Idempotency-Key` on adjustments, stored on the movement (V8, partial unique index, only for `ADJUSTMENT`) | A retried "-5 damaged" must not remove 10 units. Adjustments have no document table, so the key lives on the movement; the partial index keeps sale and purchase rows out. |
-| Stock ledger read per product (`productId` required, 404 if the product doesn't exist), newest first, in one `REPEATABLE READ` snapshot | Uses `ix_inventory_movement_product_date`; a store-wide ledger would scan the most write-heavy table. The page and its total count come from the same snapshot. Offset paging over a growing ledger can shift: clients keep the first request's `to` while paging. |
+| Stock ledger read per product (404 if the product doesn't exist) or by type across the store over at most 366 days (`productId`, or `type` with `from` and `to`), newest first, in one `REPEATABLE READ` snapshot | Uses `ix_inventory_movement_product_date` or `ix_inventory_movement_type_date` (V19); a store-wide ledger without a type would scan the most write-heavy table. The page and its total count come from the same snapshot. Offset paging over a growing ledger can shift: clients keep the first request's `to` while paging. |
 | `product.stock` is `INTEGER` | Overflow needs over 2.1 billion units of one product; accepted, it would surface as a generic 409. |
 | Sales reports aggregate in SQL inside one `REPEATABLE READ` read-only transaction with a 10 s timeout; the period is validated before it starts | Totals and breakdowns come from the same snapshot, so they agree even while sales are being recorded; no sale rows are loaded into memory. A heavy or invalid report never holds a pool connection the checkout needs. |
 | Report days follow `app.store.time-zone` (a region ID such as `America/Mexico_City`; offsets are rejected); periods are inclusive calendar days, up to 366, between 2000-01-01 and 9999-12-30 | Dates are stored in UTC, but "sales on Oct 1" means the store's local day. PostgreSQL converts both the period bounds and each sale's day (`AT TIME ZONE`), so filter and daily breakdown always agree; it reads offsets like `-06:00` with an inverted sign. |
 | Sales by period count only `COMPLETED` sales; cancelled ones are reported separately, on the day of the sale | Cancelled sales returned their stock and money, but the count is still useful for audits. A cancellation can change an already closed day, so the cash closing uses its own rule (below). |
-| Cash closing (`GET /api/v1/sale-reports/cash-closing`), for a day: sales count on the day they were rung up (even if cancelled later), cancellations on the day they were made (`cancelled_at`, partial index V9); net per payment method and per seller (can be negative), `expectedCash` = the day's opening floats + net cash, plus the day's drawers. With `cashDrawerId`, for one drawer: its sales and the refunds that came out of it, whatever their dates | The day matches the money that moved through the store. With a seller filter it covers their own sales and the cancellations of those sales, whoever cancelled them; a shared drawer is read by drawer, broken down by seller. |
+| Cash closing (`GET /api/v1/sale-reports/cash-closing`), for a day: sales count on the day they were rung up (even if cancelled later), cancellations on the day they were made (`cancelled_at`, partial index V9); net per payment method and per seller (can be negative), `expectedCash` = the day's opening floats + net cash, plus the day's drawers and `unbalancedThreshold` (`app.cash-drawer.unbalanced-threshold`, the difference from which a closed drawer is unbalanced). With `cashDrawerId`, for one drawer: its sales and the refunds that came out of it, whatever their dates | The day matches the money that moved through the store. With a seller filter it covers their own sales and the cancellations of those sales, whoever cancelled them; a shared drawer is read by drawer, broken down by seller. |
 | Cash drawer (V10, members since V14): one per local day, opened with an `opening_float`, with one or more SELLER members (`cash_drawer_member`) and a responsible among them. A seller opens a personal drawer (they are its only member); a manager opens one for one seller or a shared one for several and hands over the float (`opened_by`). Each seller is in one drawer per day and one open drawer at a time (unique `(user_id, business_date)` and partial unique `user_id WHERE drawer_open` on the member copies). Managers (ADMIN, SUPERVISOR) have no drawer and can't sell | One physical drawer per shift, maybe shared. Closing it ends selling for its members that day, so the count is final. Managers see every drawer's expected cash, so a count of their own wouldn't be blind; they open, audit and close the sellers' drawers instead. |
 | A sale records its drawer (`cash_drawer_id`) and a cancellation the drawer its refund came out of (`cancellation_drawer_id`): the one the sale's seller is in on the cancellation day, if open, else none. Expected cash per drawer = opening float + its cash sales − its cash refunds | Shared drawers can't be told apart by seller and day. A refund made while the seller has no open drawer comes out of no drawer and only shows in the day's cash closing. V14 filled old sales with the seller's drawer that was open when they were stamped. |
 | Sales lock their drawer `FOR SHARE` right after the idempotency key (found through the member row, which never changes, so that lookup needs no lock), and cancellations before stamping `cancelled_at` (drawer → sale row → products); closing locks it `FOR UPDATE`, then computes `expected_cash` and stores it with `counted_cash` | Sales and cancellations don't block each other, but closing waits for them: every sale is either in the expected cash or rejected, and every refund is either counted or comes out of no drawer. The difference (counted - expected) is a snapshot. Closing first checks the responsible without a lock, so probing other drawers' ids never blocks their sales; other members get 403. |
 | Blind count: a seller's cash closing (of a day, or of a drawer they're in) returns 409 while their drawer is open; managers always see it | A seller who knew the expected cash could declare exactly that and pocket any surplus. Hiding only the cash figures isn't enough: they follow from the total and the other payment methods. Sellers can still add up their own sales in `GET /sales`; this is a deterrent, not a guarantee. |
 | Cash closing `closed` turns true 60 s (twice the transaction timeout) after the day ends; sale and cancellation transactions time out after 30 s | Dates are stamped inside the transaction but become visible at commit, so a sale stamped 23:59:59 can appear a few seconds after midnight. Bounding the transactions bounds that gap; once closed, the figures no longer change. |
 | Lock waits (`lock_timeout`), transaction timeouts and report timeouts return 503 with `Retry-After: 1` | Everything was rolled back, so a retry is safe; a retried sale repeats its `Idempotency-Key` and can't be recorded twice. |
+| Schema changes on busy tables avoid long locks: new columns are nullable without a default and new checks `NOT VALID`, validated in a later migration (V16/V17) (`refresh_token`, small and purged daily, was backfilled and made `NOT NULL` in one step, V20, with a default for the old instance's inserts, V21); indexes are built and dropped `CONCURRENTLY` in a migration of their own (V18), with `spring.flyway.postgresql.transactional-lock: false`; `config/MigrationLockTimeout` gives non-transactional migrations a 2 min `lock_timeout` and puts the pool's 5 s back afterwards | A deploy keeps the old instance selling while the new one migrates: an `ACCESS EXCLUSIVE` lock held for a scan or a backfill would make those sales wait past `lock_timeout` (503). Flyway runs a migration made only of `CONCURRENTLY` statements outside a transaction; its default transactional lock would keep one open, which `CONCURRENTLY` waits for forever. `CONCURRENTLY` also waits for every running transaction (reports take up to 10 s) without blocking sales, so it can wait longer than 5 s; transactional migrations keep 5 s, since their queued locks would hold the checkout. |
 | Low-stock report: out-of-stock products first, then furthest below `min_stock` | A product with 0 units can't be sold at all, even if its shortage is smaller. |
+| Gross profit (`profit` in the sales report, `cost`/`grossProfit` by product) counts only lines with a known cost and says how much of the sales it covers (`costedSubtotal`); a product with any uncosted unit in the period has a null cost. Sellers never get costs | A margin computed with missing costs as zero would look better than it is. |
+| Sales by product and by customer, and the purchases summary, use the same periods, snapshot and timeout as the sales report; paged in SQL with a fixed order (amount, then id) and the client sort ignored | Pages never overlap, and the order is part of what the report means. The walk-in customer is left out of sales by customer: it would top every list. |
 | Sales are cancelled, catalogs soft-deleted (`active`) | History is never broken. |
 | Seeded "PUBLICO EN GENERAL" customer (`XAXX010101000`), looked up by tax ID constant and read-only through the API | Every sale has a customer, as Mexican invoicing requires; sales without `customerId` fall back to it, so it can't be renamed or deactivated. |
 | First ADMIN created at startup from `ADMIN_EMAIL` / `ADMIN_PASSWORD` | A password hash in a migration would be a versioned credential. |
@@ -238,12 +246,12 @@ erDiagram
 
 ## Indexes
 
-Details live in the migrations (`V1__initial-schema.sql`, V4, V9, V10, V14). Criteria:
+Details live in the migrations (`V1__initial-schema.sql`, V4, V9, V10, V14, V19). Criteria:
 
 - Every queried FK is indexed. The `UNIQUE (document_id, product_id)` constraints on line items also cover the document FK.
 - Trigram (GIN, `pg_trgm`) indexes on `lower(name)` and `lower(sku)` for product substring search (V4).
-- Date indexes for reports: `sale(sale_date)`, `purchase(purchase_date)`, `sale(user_id, sale_date)` and `inventory_movement(product_id, movement_date)`.
-- `sale(cancelled_at) WHERE cancelled_at IS NOT NULL` (V9) for the cash closing; partial because cancellations are rare.
+- Date indexes for reports: `sale(sale_date)`, `purchase(purchase_date)`, `sale(user_id, sale_date)`, `inventory_movement(product_id, movement_date)` and `inventory_movement(type, movement_date, id)` for store-wide lists such as every adjustment, built `CONCURRENTLY` (V19).
+- `sale(cancelled_at) WHERE cancelled_at IS NOT NULL` (V9) for the cash closing and the sales list's cancellation date filter; partial because cancellations are rare.
 - `cash_drawer_member (user_id, business_date)` unique, used by every sale to find its drawer; `cash_drawer_member(user_id) WHERE drawer_open` unique (one open drawer per seller); `cash_drawer(business_date)` for the store-wide cash closing (V10, V14).
 - `sale(cash_drawer_id)` and `sale(cancellation_drawer_id) WHERE cancellation_drawer_id IS NOT NULL` for a drawer's expected cash and tickets (V14).
 - `stock` is not indexed: it's the hottest column and the low-stock report scans a small catalog.
@@ -269,3 +277,4 @@ Details live in the migrations (`V1__initial-schema.sql`, V4, V9, V10, V14). Cri
 | Sales reports | ✅ | ✅ | Own sales only |
 | Cash closing | ✅ | ✅ | Own sales or a drawer they're in, once it's closed |
 | Low-stock report | ✅ | ✅ | ✅ |
+| Gross profit, sales by product and customer, purchases summary | ✅ | ✅ | ❌ |

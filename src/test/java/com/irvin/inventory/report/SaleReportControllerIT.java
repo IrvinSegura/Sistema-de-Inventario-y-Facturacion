@@ -243,7 +243,9 @@ class SaleReportControllerIT extends AbstractIntegrationTest {
         getJson("/api/v1/sale-reports/cash-closing?date=2025-11-11&sellerId=" + sellerA.id(), adminToken)
                 .andExpect(jsonPath("$.total.saleCount").value(0))
                 .andExpect(jsonPath("$.total.cancellationCount").value(1))
-                .andExpect(jsonPath("$.expectedCash").value(-3.0));
+                .andExpect(jsonPath("$.expectedCash").value(-3.0))
+                // app.cash-drawer.unbalanced-threshold's default.
+                .andExpect(jsonPath("$.unbalancedThreshold").value(50.0));
         // The admin cancelled those sales but sold none, so filtering by the admin finds nothing.
         Long adminId = ((Number) JsonPath.read(getJson("/api/v1/users/me", adminToken)
                 .andReturn().getResponse().getContentAsString(), "$.id")).longValue();

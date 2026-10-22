@@ -159,6 +159,10 @@ public class SaleService {
 
     @Transactional(readOnly = true)
     public Page<SaleSummaryResponse> search(SaleSearch search, Pageable pageable, CurrentUser viewer) {
+        // Completed sales have no cancellation date: they would come first in a descending order.
+        if (pageable.getSort().getOrderFor("cancelledAt") != null && !search.onlyCancelled()) {
+            throw new BadRequestException("Sorting by cancelledAt needs status=CANCELLED or a cancellation date range");
+        }
         SaleSearch scoped = viewer.isManager() ? search : search.withSeller(viewer.id());
         Pageable sorted = Sorting.apply(pageable, SORTABLE, DEFAULT_SORT);
         return saleRepository.findAll(scoped.toSpecification(), sorted).map(SaleSummaryResponse::from);
