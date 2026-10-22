@@ -82,6 +82,7 @@ single instance; scaling out needs a shared store for the limits.
 | `CORS_ALLOWED_ORIGINS` | Comma-separated web client origins (default `http://localhost:5173`; none in `prod` unless set) |
 | `PORT` | HTTP port (`prod`; defaults to 8080, Render sets it) |
 | `JWT_SECRET` | Base64, at least 32 bytes (`openssl rand -base64 32`) |
+| `JWT_MAX_SESSION_AGE` | How long after logging in a session ends, however often it refreshes (default `7d`; e.g. `12h`) |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Initial admin, created if none exists |
 | `MAIL_HOST` / `MAIL_PORT` / `MAIL_USERNAME` / `MAIL_PASSWORD` / `MAIL_FROM` | SMTP for password reset codes by email (optional; port defaults to 587 with STARTTLS) |
 | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` | Twilio for password reset codes by SMS (optional; number in E.164) |
