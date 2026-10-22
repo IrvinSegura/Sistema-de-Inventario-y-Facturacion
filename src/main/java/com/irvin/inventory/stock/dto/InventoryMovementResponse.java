@@ -15,7 +15,7 @@ public record InventoryMovementResponse(
         int resultingStock,
         // Only for ADJUSTMENT.
         String reason,
-        // Source document: purchase for PURCHASE; sale for SALE and SALE_CANCELLATION.
+        // Source document: purchase for PURCHASE and PURCHASE_CANCEL; sale for SALE and SALE_CANCELLATION.
         Long purchaseId,
         Long saleId,
         Long saleNumber,

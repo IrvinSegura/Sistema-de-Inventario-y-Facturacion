@@ -43,6 +43,47 @@ public class InventoryMovementRepository {
         return stock.isEmpty() ? OptionalInt.empty() : OptionalInt.of(stock.getFirst());
     }
 
+    // Returns the new stock, or empty if fewer units than the purchase brought are left. No "active"
+    // filter: the goods go back to the supplier anyway. Reverses recordPurchase's average only while no
+    // unit has left since the purchase (rule in docs/data-model.md); stock and average_cost on the
+    // right-hand side of SET are the old values.
+    @Transactional(propagation = Propagation.MANDATORY)
+    public OptionalInt recordPurchaseCancellation(Long productId, int quantity, BigDecimal unitCost,
+            Long purchaseId, Long userId) {
+        // Row lock first, in its own statement: the next one then takes a snapshot that already sees every
+        // movement committed before it. Waiting for the lock inside the UPDATE would re-read the row but
+        // not the ledger, so a sale committed meanwhile could be missed.
+        jdbcTemplate.queryForList("SELECT id FROM product WHERE id = ? FOR UPDATE", Long.class, productId);
+        List<Integer> stock = jdbcTemplate.queryForList("""
+                WITH purchased AS (
+                    SELECT id FROM inventory_movement
+                    WHERE purchase_id = ? AND product_id = ? AND type = 'PURCHASE'
+                ), updated AS (
+                    UPDATE product SET stock = stock - ?,
+                        average_cost = CASE
+                            -- Units sold or written off since then left at the average, part of it this
+                            -- purchase's cost. Other purchase cancellations left at their own cost. Every
+                            -- movement of a product is inserted under its row lock, so ids follow their order.
+                            WHEN average_cost IS NULL OR stock = ? OR EXISTS (
+                                SELECT 1 FROM inventory_movement m, purchased
+                                WHERE m.product_id = product.id AND m.id > purchased.id
+                                    AND m.quantity < 0 AND m.type <> 'PURCHASE_CANCEL'
+                            ) THEN average_cost
+                            -- The rounded average can leave slightly less value than the units cost.
+                            WHEN stock * average_cost <= ? * ? THEN average_cost
+                            ELSE ROUND((stock * average_cost - ? * ?) / (stock - ?), 4)
+                        END
+                    WHERE id = ? AND stock >= ? RETURNING id, stock
+                )
+                INSERT INTO inventory_movement (product_id, type, quantity, resulting_stock, purchase_id, user_id)
+                SELECT id, ?, ?, stock, ?, ? FROM updated
+                RETURNING resulting_stock
+                """, Integer.class,
+                purchaseId, productId, quantity, quantity, quantity, unitCost, quantity, unitCost, quantity,
+                productId, quantity, MovementType.PURCHASE_CANCEL.name(), -quantity, purchaseId, userId);
+        return stock.isEmpty() ? OptionalInt.empty() : OptionalInt.of(stock.getFirst());
+    }
+
     // Returns the new stock, or empty if stock is insufficient or the product is inactive.
     // "stock >= ?" makes concurrent sales of the last unit serialize on the row: only one wins.
     // The sale line gets the product's average cost read under that same row lock, so a purchase
