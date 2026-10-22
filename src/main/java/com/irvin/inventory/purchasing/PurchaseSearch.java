@@ -8,12 +8,16 @@ import com.irvin.inventory.common.DateBounds;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.jpa.domain.Specification;
 
-// Purchase filters; null values are ignored. The date range is [from, to).
-// Validated on construction, so a bad range fails before any transaction or query.
-public record PurchaseSearch(Long supplierId, PurchaseStatus status, Instant from, Instant to) {
+// Purchase filters; null values are ignored. [from, to) applies to the purchase date, [cancelledFrom,
+// cancelledTo) to the cancellation date (only cancelled purchases match). Validated on construction, so
+// a bad range fails before any transaction or query.
+public record PurchaseSearch(
+        Long supplierId, PurchaseStatus status, Instant from, Instant to, Instant cancelledFrom,
+        Instant cancelledTo) {
 
     public PurchaseSearch {
         DateBounds.requireRange(from, to, "from", "to");
+        DateBounds.requireRange(cancelledFrom, cancelledTo, "cancelledFrom", "cancelledTo");
     }
 
     Specification<Purchase> toSpecification() {
@@ -30,6 +34,13 @@ public record PurchaseSearch(Long supplierId, PurchaseStatus status, Instant fro
             }
             if (to != null) {
                 predicates.add(cb.lessThan(root.get("purchaseDate"), to));
+            }
+            // No index on cancelled_at: purchases are few (a store records a handful a day), unlike sales.
+            if (cancelledFrom != null) {
+                predicates.add(cb.greaterThanOrEqualTo(root.get("cancelledAt"), cancelledFrom));
+            }
+            if (cancelledTo != null) {
+                predicates.add(cb.lessThan(root.get("cancelledAt"), cancelledTo));
             }
             return cb.and(predicates.toArray(Predicate[]::new));
         };

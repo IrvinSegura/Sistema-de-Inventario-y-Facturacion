@@ -11,6 +11,7 @@ import java.util.Collections;
 import java.util.List;
 
 import com.irvin.inventory.AbstractIntegrationTest;
+import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.Test;
 
 class PurchaseCancellationIT extends AbstractIntegrationTest {
@@ -60,6 +61,29 @@ class PurchaseCancellationIT extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.content[0].status").value("COMPLETED"))
                 .andExpect(jsonPath("$.content[0].cancellation").doesNotExist());
         getJson(url + "&sort=status,desc", token).andExpect(jsonPath("$.content[0].id").value(kept));
+    }
+
+    @Test
+    void listFiltersByCancellationDate() throws Exception {
+        String token = adminAccessToken();
+        Long supplierId = createSupplier();
+        Long product = createProduct(categoryId("Pantry"), 0);
+        purchase(supplierId, product, 1, "1.00");
+        Long cancelled = purchase(supplierId, product, 1, "1.00");
+        String cancelledAt = JsonPath.read(postJson(cancellationUrl(cancelled), cancelBody("Duplicated"), token)
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(), "$.cancellation.cancelledAt");
+        String url = "/api/v1/purchases?supplierId=" + supplierId;
+
+        // [cancelledFrom, cancelledTo) on the cancellation date; purchases never cancelled don't match.
+        getJson(url + "&cancelledFrom=" + cancelledAt, token)
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].id").value(cancelled));
+        getJson(url + "&cancelledTo=" + cancelledAt, token)
+                .andExpect(jsonPath("$.content.length()").value(0));
+        Instant after = Instant.parse(cancelledAt).plus(1, ChronoUnit.HOURS);
+        getJson(url + "&cancelledFrom=" + after + "&cancelledTo=" + cancelledAt, token)
+                .andExpect(status().isBadRequest());
     }
 
     @Test
