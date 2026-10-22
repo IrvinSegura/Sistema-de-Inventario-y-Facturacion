@@ -4,6 +4,7 @@ import java.net.URI;
 import java.time.Instant;
 import java.util.UUID;
 
+import com.irvin.inventory.purchasing.dto.CancelPurchaseRequest;
 import com.irvin.inventory.purchasing.dto.CreatePurchaseRequest;
 import com.irvin.inventory.purchasing.dto.PurchaseResponse;
 import com.irvin.inventory.purchasing.dto.PurchaseSummaryResponse;
@@ -57,21 +58,35 @@ public class PurchaseController {
     }
 
     @Operation(summary = "List purchases, newest first unless sorted",
-            description = "Sort by id, purchaseDate, total, supplier or recordedBy.")
+            description = "Each one carries its cancellation (who, when and why) when cancelled. Sort by id, "
+                    + "purchaseDate, total, status, supplier or recordedBy.")
     @GetMapping
     public Page<PurchaseSummaryResponse> search(
             @RequestParam(required = false) Long supplierId,
+            @RequestParam(required = false) PurchaseStatus status,
             @Parameter(description = "Inclusive, ISO-8601 instant")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
             @Parameter(description = "Exclusive, ISO-8601 instant")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
             @ParameterObject Pageable pageable) {
-        return purchaseService.search(new PurchaseSearch(supplierId, from, to), pageable);
+        return purchaseService.search(new PurchaseSearch(supplierId, status, from, to), pageable);
     }
 
     @Operation(summary = "Get a purchase with its items")
     @GetMapping("/{id}")
     public PurchaseResponse findById(@PathVariable Long id) {
         return purchaseService.findById(id);
+    }
+
+    @Operation(summary = "Cancel a purchase and take its units back out of stock",
+            description = "Takes the units' cost out of each product's average cost. 409 if it is already "
+                    + "cancelled, or if a product has fewer units left than the purchase brought (already sold): "
+                    + "then nothing changes.")
+    @PostMapping("/{id}/cancellation")
+    public PurchaseResponse cancel(
+            @PathVariable Long id,
+            @Valid @RequestBody CancelPurchaseRequest request,
+            @AuthenticationPrincipal Jwt jwt) {
+        return purchaseService.cancel(id, request, Long.valueOf(jwt.getSubject()));
     }
 }
