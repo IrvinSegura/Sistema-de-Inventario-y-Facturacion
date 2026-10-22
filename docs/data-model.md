@@ -8,6 +8,7 @@ PostgreSQL 17. The schema changes only through Flyway migrations (`src/main/reso
 erDiagram
     app_user ||--o{ sale : records
     app_user |o--o{ sale : cancels
+    app_user |o--o{ purchase : cancels
     app_user ||--o{ purchase : records
     app_user ||--o{ inventory_movement : performs
     app_user ||--o{ refresh_token : owns
@@ -102,6 +103,10 @@ erDiagram
         bigint user_id FK
         timestamptz purchase_date
         numeric total
+        varchar status "COMPLETED | CANCELLED (V22)"
+        timestamptz cancelled_at "set when cancelled"
+        bigint cancelled_by FK "set when cancelled"
+        varchar cancellation_reason "set when cancelled"
         uuid idempotency_key UK "optional"
     }
 
@@ -158,7 +163,7 @@ erDiagram
     inventory_movement {
         bigint id PK
         bigint product_id FK
-        varchar type "PURCHASE | SALE | SALE_CANCELLATION | ADJUSTMENT"
+        varchar type "PURCHASE | PURCHASE_CANCEL | SALE | SALE_CANCELLATION | ADJUSTMENT"
         int quantity "+ in / - out"
         int resulting_stock "from UPDATE RETURNING"
         bigint purchase_id FK "optional"
@@ -197,7 +202,7 @@ erDiagram
 |---|---|
 | Stock decremented with `UPDATE ... SET stock = stock - :qty WHERE id = :id AND stock >= :qty RETURNING stock`, backed by `CHECK (stock >= 0)` | Two sellers selling the last unit at once: only one succeeds. |
 | `Product.stock` mapped `insertable = false, updatable = false` | Otherwise an admin editing the price could overwrite stock with a stale value and silently undo sales. |
-| `product.average_cost` (weighted average, `NUMERIC(14,4)`, not mapped by JPA) moves in the purchase's stock `UPDATE`: `(stock * average_cost + qty * unit_cost) / (stock + qty)` with the old values, or the new cost when there were no units; sales, cancellations and adjustments leave it as is. `sale_item.unit_cost` is stamped by the sale's stock `UPDATE` (a data-modifying CTE) | Both read and write the cost under the product's row lock, so concurrent purchases and sales never average or snapshot a stale cost. Four decimals keep repeated averaging from drifting. Lines sold before V16, or of products never purchased, keep a `NULL` cost: reports treat it as unknown, never as zero. |
+| `product.average_cost` (weighted average, `NUMERIC(14,4)`, not mapped by JPA) moves in the purchase's stock `UPDATE`: `(stock * average_cost + qty * unit_cost) / (stock + qty)` with the old values, or the new cost when there were no units; a purchase cancellation takes `qty * unit_cost` back out, `(stock * average_cost - qty * unit_cost) / (stock - qty)`, but only while no unit of the product was sold or written off since that purchase (those left at the average, part of it this purchase's cost, so taking it out again would undervalue the rest; other purchase cancellations left at their own cost and don't count) and some units would remain; otherwise it leaves it. It locks the product row in a statement of its own first, so the ledger check sees every movement committed before it; movement ids follow each product's order, since every movement is inserted under its row lock; sales, sale cancellations and adjustments leave it as is. `sale_item.unit_cost` is stamped by the sale's stock `UPDATE` (a data-modifying CTE) | Both read and write the cost under the product's row lock, so concurrent purchases and sales never average or snapshot a stale cost. Four decimals keep repeated averaging from drifting. Lines sold before V16, or of products never purchased, keep a `NULL` cost: reports treat it as unknown, never as zero. |
 | `version` on product, category, supplier and customer; clients send the version they loaded | Concurrent catalog edits are detected (409) instead of silently overwritten; doesn't cover stock, so it never conflicts with sales. |
 | Category locked before product: FOR SHARE to assign/activate a product, FOR UPDATE to deactivate | An active product never ends up in an inactive category, even under concurrent edits. |
 | Purchases lock the supplier and sales the customer `FOR SHARE` before any product | The supplier or customer can't be deactivated while a document that uses it is being recorded. |
@@ -205,9 +210,10 @@ erDiagram
 | Stock written only by `InventoryMovementRepository`: one CTE per line (`UPDATE product ... AND active RETURNING stock` + `INSERT inventory_movement`) | The stock change and its movement happen while the row is locked, so `resulting_stock` is exact under concurrency and no movement can be forgotten. |
 | Idempotency: transaction-scoped advisory lock on `scope:key`, then lookup; same key with a different payload → 409 | Concurrent retries (double click) record exactly one document. |
 | `idempotency_key` on sale (required, V7) and purchase (optional) | A double click or retry returns the existing document instead of creating a duplicate. Double clicks are common at the checkout; purchases are recorded only by admins. A sale key reused by another seller is a 409, so it never reveals their sale. |
-| Atomic cancellation (`UPDATE sale SET status = 'CANCELLED', cancelled_at, cancelled_by, cancellation_reason WHERE id = :id AND status = 'COMPLETED'`) + unique index per (sale, product, type) | Concurrent cancellations can't return stock twice; who, when and why is always recorded (enforced by `ck_sale_status`). |
+| Atomic cancellation (`UPDATE sale SET status = 'CANCELLED', cancelled_at, cancelled_by, cancellation_reason WHERE id = :id AND status = 'COMPLETED'`) + unique index per (sale, product, type) | Concurrent cancellations can't return stock twice; who, when and why is always recorded (enforced by `ck_sale_status`). Purchases follow the same rule (`ck_purchase_status`, unique index per (purchase, product, type), V22-V25). |
 | Only ADMIN changes a customer's tax ID or `active` flag (403 for sellers) | Sales reference the customer, so past receipts show its current tax ID; deactivating it blocks every checkout. Sellers still register customers and fix contact data. |
 | Cancellation returns stock even to products deactivated after the sale | The goods are physically back on the shelf; the product just can't be sold until it's reactivated. |
+| A purchase cancellation takes all its units out or none: if a product has fewer units left than the purchase brought (409), nothing changes. It applies to products deactivated since, and the purchases summary leaves cancelled purchases out | Stock never goes negative; units already sold can't go back to the supplier, so a partial cancellation would leave the purchase half true. A manager corrects that case with a manual adjustment. |
 | `barcode` (optional, unique, 8-14 digits) separate from `sku` | Grocery items are sold by scanning; `sku` stays as the internal code, also for unlabeled items. |
 | `image_url` only; images live in object storage (Cloudinary/S3) | Binary files bloat and slow down the DB. |
 | `payment_method` on sale | Needed for reports and cash closing. |
@@ -237,14 +243,14 @@ erDiagram
 | Low-stock report: out-of-stock products first, then furthest below `min_stock` | A product with 0 units can't be sold at all, even if its shortage is smaller. |
 | Gross profit (`profit` in the sales report, `cost`/`grossProfit` by product) counts only lines with a known cost and says how much of the sales it covers (`costedSubtotal`); a product with any uncosted unit in the period has a null cost. Sellers never get costs | A margin computed with missing costs as zero would look better than it is. |
 | Sales by product and by customer, and the purchases summary, use the same periods, snapshot and timeout as the sales report; paged in SQL with a fixed order (amount, then id) and the client sort ignored | Pages never overlap, and the order is part of what the report means. The walk-in customer is left out of sales by customer: it would top every list. |
-| Sales are cancelled, catalogs soft-deleted (`active`) | History is never broken. |
+| Sales and purchases are cancelled, catalogs soft-deleted (`active`) | History is never broken. |
 | Seeded "PUBLICO EN GENERAL" customer (`XAXX010101000`), looked up by tax ID constant and read-only through the API | Every sale has a customer, as Mexican invoicing requires; sales without `customerId` fall back to it, so it can't be renamed or deactivated. |
 | First ADMIN created at startup from `ADMIN_EMAIL` / `ADMIN_PASSWORD` | A password hash in a migration would be a versioned credential. |
 | `BIGINT IDENTITY` ids, `TIMESTAMPTZ` dates | PostgreSQL standard; time zone-safe reports. |
 
 ## Indexes
 
-Details live in the migrations (`V1__initial-schema.sql`, V4, V9, V10, V14, V19). Criteria:
+Details live in the migrations (`V1__initial-schema.sql`, V4, V9, V10, V14, V19, V24). Criteria:
 
 - Every queried FK is indexed. The `UNIQUE (document_id, product_id)` constraints on line items also cover the document FK.
 - Trigram (GIN, `pg_trgm`) indexes on `lower(name)` and `lower(sku)` for product substring search (V4).
@@ -270,6 +276,7 @@ Details live in the migrations (`V1__initial-schema.sql`, V4, V9, V10, V14, V19)
 | Close a cash drawer | ✅ Any | ✅ Any | Its responsible only |
 | View sales | ✅ | ✅ | Own sales only |
 | Cancel sales | ✅ | ✅ | ❌ |
+| Cancel purchases | ✅ | ✅ | ❌ |
 | Manual stock adjustments | ✅ | ✅ | ❌ |
 | View the stock ledger | ✅ | ✅ | ❌ |
 | Sales reports | ✅ | ✅ | Own sales only |
