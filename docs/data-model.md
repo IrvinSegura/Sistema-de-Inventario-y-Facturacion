@@ -91,6 +91,8 @@ erDiagram
         varchar email
         varchar phone
         varchar address
+        varchar fiscal_postal_code "with tax_id and tax_regime, or none (V15)"
+        varchar tax_regime "SAT c_RegimenFiscal code (V15)"
         boolean active
         bigint version "optimistic lock (V6)"
         timestamptz created_at
