@@ -10,6 +10,8 @@ erDiagram
     app_user |o--o{ sale : cancels
     app_user |o--o{ purchase : cancels
     app_user ||--o{ purchase : records
+    app_user ||--o{ account_event : "changed in"
+    app_user ||--o{ account_event : "made by"
     app_user ||--o{ inventory_movement : performs
     app_user ||--o{ refresh_token : owns
     app_user ||--o{ cash_drawer : opens
@@ -37,8 +39,20 @@ erDiagram
         varchar password_hash "BCrypt"
         varchar role "ADMIN | SUPERVISOR | SELLER"
         boolean active
+        boolean password_change_required "temporary password set by an admin (V26)"
+        int credentials_version "access tokens carry it; older ones are refused (V27)"
         timestamptz created_at
         timestamptz updated_at
+    }
+
+    account_event {
+        bigint id PK
+        bigint user_id FK "the account changed"
+        bigint actor_id FK "admin, or the user themself"
+        varchar type "CREATED | EMAIL_CHANGED | PHONE_CHANGED | ROLE_CHANGED | DEACTIVATED | REACTIVATED | PASSWORD_RESET | PASSWORD_CHANGED | PASSWORD_RECOVERED (V30)"
+        varchar old_value "email, phone or role before; TEMPORARY for a changed temporary password"
+        varchar new_value "email, phone or role after"
+        timestamptz occurred_at
     }
 
     category {
@@ -224,6 +238,11 @@ erDiagram
 | `unit_price` and `tax_rate` copied into `sale_item`, read before the product row is locked | Past sales keep their original price and tax. A price edited at the same instant leaves the sale with the price the checkout saw, which is acceptable. |
 | Seeded grocery categories with `default_tax_rate` (Pantry, Dairy, Bakery 0%; Beverages, Snacks, Cleaning, Personal Care 16%) | Pre-fills the product VAT so classification errors are less likely; each product can still override it. |
 | Refresh tokens stored as SHA-256 hashes, rotated on every use; reuse of a `ROTATED` token revokes all of the user's sessions; expired ones deleted daily. Every rotated token keeps its login's `session_started_at` and expires by `app.jwt.max-session-age` after it at the latest (V20) | Stolen refresh tokens are detected without logging users out for a stale logged-out token; a DB leak doesn't expose usable tokens. Screens that poll the API refresh the session on their own, so without a maximum a browser left signed in would stay signed in forever. |
+| An admin resets a forgotten password to a temporary one the user must change before anything else: `password_change_required` (V26) travels as the access token's `pwd_change` claim, and `PasswordChangeInterceptor` answers 403 to every endpoint but the profile, the own password change and the public auth ones. The reset revokes the user's sessions and pending reset codes (so does every password change); an email change revokes the codes too. The new password must differ from the current one; access tokens issued before stop working at once (`credentials_version`, below) | The admin who typed the temporary password can't use the account without the user noticing (they're emailed about the reset, and the history marks the change of a temporary password), and a user without access to their email or phone can still get back in. The claim is fixed in each token, which is fine because the reset ends every session and the next login carries it. Codes sent to an old address must not reset the password. |
+| `app_user.credentials_version` (V27) goes up on a password change, reset or recovery, a role change and a deactivation; access tokens carry it (claim `cv`) and `CredentialsVersionValidator`, in the `JwtDecoder`, refuses an older one (401) | Those changes take effect at once instead of when the 15-minute access token expires (its refresh token is revoked too, so the session ends). It costs one primary-key read per authenticated request, fine for a store's few users; tokens issued before V27 have no claim and match version 0. |
+| Every account change goes to `account_event` (V28, V30) in the same transaction through `AccountEventRecorder`: who (`actor_id`; the user themself for their own change or a forgotten-password reset, the admin for anything else; the initial admin creates itself), what, before/after for email, phone and role, when. A changed phone also ends pending reset codes (it receives them by SMS). Read by admins only (`GET /users/{id}/events`, always newest first) | An admin can take over another account (change its email, reset its password), and the trail shows who did. Written with the change, so it can't be skipped or left out by a rollback. |
+| An admin's email change is told to the old address, and a phone change or password reset to the account's email, after the change commits and in the background (`AccountChangeNotifier`), bilingual since users have no language setting and with new values masked; without SMTP it's only logged | A takeover through the email, the phone or a reset doesn't go unnoticed, the old (maybe compromised) address doesn't learn the new one, and a slow or failing mail server never holds or undoes the change. |
+| Login checks the credentials version and status again under the user lock before issuing tokens; the public `/auth` endpoints ignore any bearer token (`PublicEndpointsBearerTokenResolver`) | A password change committed while BCrypt checked the old one can't leave that login a session, and a token a change just made invalid doesn't turn signing in again or out into a 401. |
 | Emails stored lowercase (`CHECK (email = LOWER(email))`) with a plain unique index | Case-insensitive uniqueness and indexed login lookups. |
 | VAT rate per product (`tax_rate`: 0% basic food, 16% general); tax computed and rounded per line (HALF_UP); `sale.tax` = sum of line taxes | Mexican grocery store: sugar or rice pay 0%, soda or snacks 16%. |
 | Money as `NUMERIC(12,2)` / `BigDecimal`; `sale_price` is pre-tax | No floating-point rounding errors; totals computed server-side. |
@@ -260,13 +279,14 @@ A transactional migration that fails rolls back and simply runs again on the nex
 
 ## Indexes
 
-Details live in the migrations (`V1__initial-schema.sql`, V4, V9, V10, V14, V19, V24). Criteria:
+Details live in the migrations (`V1__initial-schema.sql`, V4, V9, V10, V14, V19, V24, V28, V29). Criteria:
 
 - Every queried FK is indexed. The `UNIQUE (document_id, product_id)` constraints on line items also cover the document FK.
 - Trigram (GIN, `pg_trgm`) indexes on `lower(name)` and `lower(sku)` for product substring search (V4).
 - Date indexes for reports: `sale(sale_date)`, `purchase(purchase_date)`, `sale(user_id, sale_date)`, `inventory_movement(product_id, movement_date)` and `inventory_movement(type, movement_date, id)` for store-wide lists such as every adjustment, built `CONCURRENTLY` (V19).
 - `sale(cancelled_at) WHERE cancelled_at IS NOT NULL` (V9) for the cash closing and the sales list's cancellation date filter; partial because cancellations are rare.
-- No index on `purchase(cancelled_at)`, on purpose: the purchases list's cancellation date filter (Supervision counts the day's cancellations every minute) scans a table of a few purchases a day. If it grows, add a partial one like V9's, `CONCURRENTLY` in a migration of its own.
+- `purchase(cancelled_at) WHERE cancelled_at IS NOT NULL` (V29) for the purchases list's cancellation date filter, which Supervision polls every minute; partial like V9's.
+- `account_event(user_id, occurred_at)` for a user's history, and `account_event(actor_id)` for its FK (V28).
 - `cash_drawer_member (user_id, business_date)` unique, used by every sale to find its drawer; `cash_drawer_member(user_id) WHERE drawer_open` unique (one open drawer per seller); `cash_drawer(business_date)` for the store-wide cash closing (V10, V14).
 - `sale(cash_drawer_id)` and `sale(cancellation_drawer_id) WHERE cancellation_drawer_id IS NOT NULL` for a drawer's expected cash and tickets (V14).
 - `stock` is not indexed: it's the hottest column and the low-stock report scans a small catalog.
@@ -275,7 +295,8 @@ Details live in the migrations (`V1__initial-schema.sql`, V4, V9, V10, V14, V19,
 
 | Action | ADMIN | SUPERVISOR | SELLER |
 |---|:---:|:---:|:---:|
-| Manage users | ✅ | ❌ | ❌ |
+| Manage users, incl. changing their email and resetting their password, and read their history | ✅ | ❌ | ❌ |
+| List sellers, and former sellers with sales (for filters) | ✅ | ✅ | ❌ |
 | Manage products, categories, suppliers | ✅ | ✅ | ❌ |
 | View products and stock | ✅ | ✅ | ✅ |
 | Record purchases | ✅ | ✅ | ❌ |
