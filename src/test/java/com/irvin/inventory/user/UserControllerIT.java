@@ -179,16 +179,21 @@ class UserControllerIT extends AbstractIntegrationTest {
         String secondToken = loginOk(secondAdmin.email(), DEFAULT_PASSWORD).accessToken();
 
         CountDownLatch start = new CountDownLatch(1);
+        int seededDemoted = 0;
         try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
             Future<Integer> first = executor.submit(() -> demoteWhenReleased(start, secondAdmin.id(), seededToken));
             Future<Integer> second = executor.submit(() -> demoteWhenReleased(start, seededAdminId, secondToken));
             start.countDown();
+            seededDemoted = second.get();
 
-            assertThat(List.of(first.get(), second.get())).containsExactlyInAnyOrder(200, 409);
+            assertThat(List.of(first.get(), seededDemoted)).containsExactlyInAnyOrder(200, 409);
         } finally {
-            // Both access tokens still carry the ADMIN claim, so either can restore the initial state.
-            putJson("/api/v1/users/" + seededAdminId, updateBody("ADMIN", true), secondToken);
-            putJson("/api/v1/users/" + secondAdmin.id(), updateBody("SELLER", false), seededToken)
+            // A demoted admin's token stops working at once, so the one still ADMIN restores the seeded admin.
+            if (seededDemoted == 200) {
+                putJson("/api/v1/users/" + seededAdminId, updateBody("ADMIN", true), secondToken)
+                        .andExpect(status().isOk());
+            }
+            putJson("/api/v1/users/" + secondAdmin.id(), updateBody("SELLER", false), adminAccessToken())
                     .andExpect(status().isOk());
         }
     }

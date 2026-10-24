@@ -3,6 +3,7 @@ package com.irvin.inventory.user;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import com.irvin.inventory.common.exception.ConflictException;
 import com.irvin.inventory.user.dto.CreateUserRequest;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
@@ -46,9 +47,9 @@ public class AdminInitializer implements ApplicationRunner {
         }
 
         try {
-            userService.create(request);
+            userService.create(request, null);
             log.info("Initial admin user created.");
-        } catch (DataIntegrityViolationException e) {
+        } catch (DataIntegrityViolationException | ConflictException e) {
             // Another instance starting at the same time created it first.
             log.info("Initial admin user already created by another instance.");
         }
