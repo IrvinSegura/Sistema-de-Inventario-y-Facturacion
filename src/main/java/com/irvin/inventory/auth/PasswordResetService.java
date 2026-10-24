@@ -11,11 +11,14 @@ import java.util.Locale;
 import com.irvin.inventory.auth.dto.PasswordResetCodeRequest;
 import com.irvin.inventory.auth.dto.ResetPasswordRequest;
 import com.irvin.inventory.common.exception.BadRequestException;
+import com.irvin.inventory.user.AccountEventRecorder;
+import com.irvin.inventory.user.AccountEventType;
 import com.irvin.inventory.user.User;
 import com.irvin.inventory.user.UserRepository;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -39,10 +42,12 @@ public class PasswordResetService {
     private final PasswordResetProperties properties;
     private final Clock clock;
     private final TransactionTemplate transactionTemplate;
+    private final AccountEventRecorder accountEvents;
 
     public PasswordResetService(UserRepository userRepository, PasswordResetCodeRepository codeRepository,
             AuthService authService, PasswordResetDispatcher dispatcher, PasswordEncoder passwordEncoder,
-            PasswordResetProperties properties, Clock clock, TransactionTemplate transactionTemplate) {
+            PasswordResetProperties properties, Clock clock, TransactionTemplate transactionTemplate,
+            AccountEventRecorder accountEvents) {
         this.userRepository = userRepository;
         this.codeRepository = codeRepository;
         this.authService = authService;
@@ -51,6 +56,7 @@ public class PasswordResetService {
         this.properties = properties;
         this.clock = clock;
         this.transactionTemplate = transactionTemplate;
+        this.accountEvents = accountEvents;
     }
 
     // Silently does nothing for unknown or inactive accounts, SMS without a phone, or when the
@@ -63,7 +69,7 @@ public class PasswordResetService {
         if (request.channel() == ResetChannel.SMS && user.getPhone() == null) {
             return;
         }
-        String code = transactionTemplate.execute(status -> issueCode(user.getId(), request.channel()));
+        String code = transactionTemplate.execute(status -> issueCode(user.getId(), request.email(), request.channel()));
         if (code != null) {
             dispatcher.dispatch(new ResetMessage(request.channel(), user.getId(), user.getName(), user.getEmail(),
                     user.getPhone(), code, properties.codeTtl(), Locale.forLanguageTag(request.language())));
@@ -88,10 +94,17 @@ public class PasswordResetService {
         codeRepository.deleteCreatedBefore(clock.instant().minus(RETENTION));
     }
 
-    // Returns the raw code, or null when the user must wait before asking again.
-    private String issueCode(Long userId, ResetChannel channel) {
+    // After the user's password or email changes outside this flow. Caller must hold the user row lock.
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void invalidateCodes(Long userId) {
+        codeRepository.invalidateAllByUserId(userId, clock.instant());
+    }
+
+    // Returns the raw code, or null when the user must wait before asking again. Also null when an admin
+    // changed the email since it was looked up: the code would go to the old address.
+    private String issueCode(Long userId, String email, ResetChannel channel) {
         User user = userRepository.findByIdForUpdate(userId).orElse(null);
-        if (user == null || !user.isActive()) {
+        if (user == null || !user.isActive() || !user.getEmail().equals(email)) {
             return null;
         }
         Instant now = clock.instant();
@@ -136,6 +149,10 @@ public class PasswordResetService {
         }
         code.invalidate(now);
         user.setPasswordHash(newPasswordHash);
+        // The user chose it, so a temporary one an admin set no longer has to be changed.
+        user.setPasswordChangeRequired(false);
+        user.invalidateIssuedTokens();
+        accountEvents.record(userId, userId, AccountEventType.PASSWORD_RECOVERED, null, null);
         // Whoever knew the old password loses their sessions.
         authService.revokeAllSessions(userId);
         return true;
