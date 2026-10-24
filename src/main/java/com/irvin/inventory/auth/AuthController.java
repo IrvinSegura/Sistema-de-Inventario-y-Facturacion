@@ -5,6 +5,7 @@ import com.irvin.inventory.auth.dto.PasswordResetCodeRequest;
 import com.irvin.inventory.auth.dto.RefreshTokenRequest;
 import com.irvin.inventory.auth.dto.ResetPasswordRequest;
 import com.irvin.inventory.auth.dto.TokenResponse;
+import com.irvin.inventory.security.AllowedBeforePasswordChange;
 import com.irvin.inventory.security.RateLimitPolicy;
 import com.irvin.inventory.security.RateLimited;
 import io.swagger.v3.oas.annotations.Operation;
@@ -21,6 +22,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "Authentication")
 @SecurityRequirements // public endpoints: no bearer token
+// Public: a user who must change a temporary password still signs in, refreshes and signs out.
+@AllowedBeforePasswordChange
 @RestController
 @RequestMapping("/api/v1/auth")
 @RequiredArgsConstructor

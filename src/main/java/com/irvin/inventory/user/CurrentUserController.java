@@ -1,5 +1,6 @@
 package com.irvin.inventory.user;
 
+import com.irvin.inventory.security.AllowedBeforePasswordChange;
 import com.irvin.inventory.user.dto.ChangePasswordRequest;
 import com.irvin.inventory.user.dto.UserResponse;
 import io.swagger.v3.oas.annotations.Operation;
@@ -26,12 +27,14 @@ public class CurrentUserController {
     private final UserService userService;
 
     @Operation(summary = "Get the authenticated user")
+    @AllowedBeforePasswordChange
     @GetMapping
     public UserResponse me(@AuthenticationPrincipal Jwt jwt) {
         return userService.findById(userId(jwt));
     }
 
     @Operation(summary = "Change own password; revokes all sessions")
+    @AllowedBeforePasswordChange
     @PutMapping("/password")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void changePassword(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody ChangePasswordRequest request) {
