@@ -37,6 +37,59 @@ class PasswordResetIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void aForgottenPasswordResetClearsTheRequiredChange() throws Exception {
+        CreatedUser seller = createSeller();
+        putJson("/api/v1/users/" + seller.id() + "/password", """
+                {"temporaryPassword": "temporary-pass-1"}
+                """, adminAccessToken()).andExpect(status().isNoContent());
+
+        requestCode(seller.email(), "EMAIL", "es").andExpect(status().isAccepted());
+        reset(seller.email(), sender.next(seller.email()).code(), NEW_PASSWORD).andExpect(status().isNoContent());
+
+        String token = loginOk(seller.email(), NEW_PASSWORD).accessToken();
+        getJson("/api/v1/users/me", token).andExpect(jsonPath("$.passwordChangeRequired").value(false));
+        getJson("/api/v1/products", token).andExpect(status().isOk());
+        getJson("/api/v1/users/" + seller.id() + "/events", adminAccessToken())
+                .andExpect(jsonPath("$.content[0].type").value("PASSWORD_RECOVERED"))
+                .andExpect(jsonPath("$.content[0].actor.id").value(seller.id()));
+    }
+
+    @Test
+    void aRecoveredPasswordEndsOpenSessionsAtOnce() throws Exception {
+        CreatedUser seller = createSeller();
+        String openSession = loginOk(seller.email(), DEFAULT_PASSWORD).accessToken();
+
+        requestCode(seller.email(), "EMAIL", "es").andExpect(status().isAccepted());
+        reset(seller.email(), sender.next(seller.email()).code(), NEW_PASSWORD).andExpect(status().isNoContent());
+
+        getJson("/api/v1/users/me", openSession).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void codesSentBeforeAnAdminChangeStopWorking() throws Exception {
+        String adminToken = adminAccessToken();
+        CreatedUser emailed = createSeller();
+        CreatedUser resetUser = createSeller();
+        requestCode(emailed.email(), "EMAIL", "es").andExpect(status().isAccepted());
+        requestCode(resetUser.email(), "EMAIL", "es").andExpect(status().isAccepted());
+        String emailedCode = sender.next(emailed.email()).code();
+        String resetUserCode = sender.next(resetUser.email()).code();
+        String newEmail = "moved-" + emailed.id() + "-" + System.nanoTime() + "@test.com";
+
+        // The code went to the old address.
+        putJson("/api/v1/users/" + emailed.id(), """
+                {"name": "Test User", "email": "%s", "role": "SELLER", "active": true}
+                """.formatted(newEmail), adminToken).andExpect(status().isOk());
+        putJson("/api/v1/users/" + resetUser.id() + "/password", """
+                {"temporaryPassword": "temporary-pass-1"}
+                """, adminToken).andExpect(status().isNoContent());
+
+        reset(newEmail, emailedCode, NEW_PASSWORD).andExpect(status().isBadRequest());
+        reset(resetUser.email(), resetUserCode, NEW_PASSWORD).andExpect(status().isBadRequest());
+        login(newEmail, DEFAULT_PASSWORD).andExpect(status().isOk());
+    }
+
+    @Test
     void unknownEmailGetsTheSameAnswerAndNothingIsSent() throws Exception {
         requestCode("nobody-reset@test.com", "EMAIL", "en").andExpect(status().isAccepted());
         assertThat(sender.nothingSentTo("nobody-reset@test.com")).isTrue();

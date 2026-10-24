@@ -1,94 +1,157 @@
-# Inventory Billing System
+# Sistema de Inventario y Facturación
 
-REST API for a grocery store: inventory, supplier purchases and sales with basic billing.
+API REST para una tienda de abarrotes: inventario, compras a proveedores y ventas con facturación básica. Su
+cliente web (punto de venta, caja, administración y reportes) está en
+[Sistema-de-Inventario-y-Facturacion_Front](https://github.com/IrvinSegura/Sistema-de-Inventario-y-Facturacion_Front).
 
-## Features
+![Panel del cliente web](docs/screenshots/dashboard.png)
 
-- JWT authentication with `ADMIN`, `SUPERVISOR` and `SELLER` roles.
-- Product catalog with categories, per-product VAT (0% / 16%), barcode lookup, search and product photos
-  (PNG, JPEG, WebP or GIF, checked by content; Cloudinary in production, a local folder in development).
-- Supplier purchases with concurrency-safe stock and idempotent requests.
-- Customers, with SAT's walk-in customer ("PUBLICO EN GENERAL") as the default.
-- Sales with server-side prices and per-line VAT, sequential sale numbers, a required `Idempotency-Key` and
-  atomic cancellation that returns stock. Stock never goes negative, even when sellers race for the last unit.
-- Cash drawers: a seller opens the day's drawer with an opening float (required to sell), or a manager opens
-  one for a seller or a shared one for several; its responsible closes it with the counted cash, recording
-  the expected cash and the surplus or shortage. Managers have no drawer and don't sell.
-- Manual stock adjustments with a required reason (optionally idempotent), and a stock ledger of every
-  change, per product or by type across the store.
-- Reports: sales by period (totals, payment methods, sellers, top products, daily breakdown in the store's
-  time zone, and gross profit for managers), a daily cash closing by payment method with the day's drawers and
-  a low-stock reorder list. Sellers only see their own sales. Managers also get sales by product (with cost
-  and gross profit, or the products in stock that didn't sell), sales by registered customer and a purchases
-  summary (suppliers, top products, daily breakdown).
-- Cost of goods sold: every purchase updates the product's weighted average cost, and every sale line keeps
-  the cost it had when sold.
+Contenido: [Características](#características) · [Capturas de pantalla](#capturas-de-pantalla) · [Stack](#stack) ·
+[Instalación](#instalación) · [Ejecutar con Docker](#ejecutar-con-docker) · [Despliegue (Render)](#despliegue-render) ·
+[Pruebas](#pruebas) · [Variables de entorno](#variables-de-entorno)
 
-Database design: [docs/data-model.md](docs/data-model.md).
+## Características
+
+- Autenticación JWT con los roles `ADMIN`, `SUPERVISOR` y `SELLER`.
+- Catálogo de productos con categorías, IVA por producto (0% / 16%), búsqueda por código de barras, búsqueda
+  general y fotos de producto (PNG, JPEG, WebP o GIF, validadas por contenido; Cloudinary en producción, una carpeta
+  local en desarrollo).
+- Compras a proveedores con stock seguro ante concurrencia y peticiones idempotentes.
+- Clientes, con el cliente genérico del SAT ("PUBLICO EN GENERAL") por defecto.
+- Ventas con precios calculados en el servidor e IVA por línea, números de venta consecutivos, `Idempotency-Key`
+  obligatorio y cancelación atómica que regresa el stock. El stock nunca queda negativo, aunque varios vendedores
+  compitan por la última unidad.
+- Cajas: un vendedor abre la caja del día con un fondo inicial (necesario para vender), o un gerente abre una para
+  un vendedor o una compartida para varios; su responsable la cierra con el efectivo contado, y queda registrado el
+  efectivo esperado y el sobrante o faltante. Los gerentes no tienen caja ni venden.
+- Ajustes manuales de stock con motivo obligatorio (opcionalmente idempotentes) y un kardex de cada cambio, por
+  producto o por tipo en toda la tienda.
+- Reportes: ventas por periodo (totales, formas de pago, vendedores, productos más vendidos, desglose diario en la
+  zona horaria de la tienda y utilidad bruta para gerentes), corte de caja diario por forma de pago con las cajas
+  del día y una lista de productos por resurtir. Los vendedores solo ven sus propias ventas. Los gerentes además
+  tienen ventas por producto (con costo y utilidad bruta, o los productos en existencia que no se vendieron),
+  ventas por cliente registrado y un resumen de compras (proveedores, productos más comprados, desglose diario).
+- Costo de lo vendido: cada compra actualiza el costo promedio ponderado del producto, y cada línea de venta
+  conserva el costo que tenía al venderse.
+
+Diseño de la base de datos: [docs/data-model.md](docs/data-model.md).
+
+## Capturas de pantalla
+
+Los módulos de la API tal como los muestra el cliente web, con datos de demostración (más en el
+[README del cliente web](https://github.com/IrvinSegura/Sistema-de-Inventario-y-Facturacion_Front#capturas-de-pantalla)).
+
+| Punto de venta | Supervisión |
+|---|---|
+| ![Punto de venta](docs/screenshots/checkout.png) | ![Supervisión](docs/screenshots/supervision.png) |
+
+| Ventas | Inventario |
+|---|---|
+| ![Ventas](docs/screenshots/sales.png) | ![Inventario](docs/screenshots/inventory.png) |
+
+| Reporte de ventas | Corte de caja |
+|---|---|
+| ![Reporte de ventas](docs/screenshots/report-sales.png) | ![Corte de caja](docs/screenshots/report-cash-closing.png) |
+
+Todos los endpoints están documentados con OpenAPI y se pueden probar desde Swagger UI:
+
+![Swagger UI](docs/screenshots/swagger.png)
 
 ## Stack
 
 Java 21 · Spring Boot 4 · Spring Security · PostgreSQL 17 · Flyway · Docker · Testcontainers
 
-## Run locally
+## Instalación
 
-Requires JDK 21 and Docker.
+Requiere JDK 21, Docker (Docker Desktop en Windows y macOS) y Git. No hace falta instalar PostgreSQL: al arrancar,
+la app levanta el servicio `postgres` de `compose.yaml` y lo deja corriendo.
 
-1. Copy `.env.example` to `.env` and fill in the values.
-2. Run:
+1. Clona el repositorio:
 
-```bash
-./mvnw spring-boot:run
-```
+   ```bash
+   git clone https://github.com/IrvinSegura/Sistema-de-Inventario-y-Facturacion.git
+   cd Sistema-de-Inventario-y-Facturacion
+   ```
 
-API docs: http://localhost:8080/swagger-ui.html
+2. Copia `.env.example` a `.env` (ignorado por git) y llena al menos:
 
-## Run with Docker
+   ```dotenv
+   # Base64 de al menos 32 bytes aleatorios: openssl rand -base64 32
+   JWT_SECRET=...
+   # El primer admin, se crea al arrancar si no existe ninguno
+   ADMIN_EMAIL=admin@example.com
+   ADMIN_PASSWORD=...
+   ```
 
-The image packages the app only (tests run in CI). Against any PostgreSQL:
+   Correo, SMS y Cloudinary son opcionales: sin ellos, los códigos para restablecer la contraseña se escriben en el
+   log y las imágenes de producto se guardan en `uploads/images` (ver [Variables de entorno](#variables-de-entorno)).
+
+3. Con Docker corriendo, inicia la API (`mvnw.cmd spring-boot:run` en Windows sin Git Bash):
+
+   ```bash
+   ./mvnw spring-boot:run
+   ```
+
+   La primera vez descarga las dependencias y la imagen de PostgreSQL; después Flyway crea el esquema con las
+   categorías por defecto y el cliente genérico.
+
+4. Revísala en http://localhost:8080/actuator/health y explora la API en http://localhost:8080/swagger-ui.html.
+   Para llamar a los endpoints protegidos, inicia sesión con `POST /api/v1/auth/login` usando el admin del paso 2
+   y pega el `accessToken` en **Authorize**.
+
+5. Opcionalmente, ejecuta el [cliente web](https://github.com/IrvinSegura/Sistema-de-Inventario-y-Facturacion_Front#instalación)
+   en http://localhost:5173, que esta API permite por defecto.
+
+## Ejecutar con Docker
+
+La imagen empaqueta solo la app (las pruebas corren en CI). Contra cualquier PostgreSQL:
 
 ```bash
 docker build -t inventory-billing-system .
 docker run -p 8080:8080 -e SPRING_PROFILES_ACTIVE=prod -e DB_HOST=... -e DB_NAME=... -e DB_USER=... -e DB_PASSWORD=... -e JWT_SECRET=... -e ADMIN_EMAIL=... -e ADMIN_PASSWORD=... inventory-billing-system
 ```
 
-## Deploy (Render)
+## Despliegue (Render)
 
-`render.yaml` is a Render Blueprint: the API (Docker, free plan) plus a private PostgreSQL 17.
+`render.yaml` es un Blueprint de Render: la API (Docker, plan gratuito) más un PostgreSQL 17 privado.
 
-1. In Render: **New > Blueprint**, pick this repository.
-2. Fill in `ADMIN_EMAIL` and `ADMIN_PASSWORD` when asked; `JWT_SECRET` is generated and the database
-   variables are wired automatically.
-3. Every push to `main` deploys once CI passes; `/actuator/health` (database included) gates each deploy.
+1. En Render: **New > Blueprint** y elige este repositorio.
+2. Llena `ADMIN_EMAIL` y `ADMIN_PASSWORD` cuando lo pida; `JWT_SECRET` se genera solo y las variables de la base de
+   datos se conectan automáticamente.
+3. Cada push a `main` se despliega cuando pasa el CI; `/actuator/health` (incluida la base de datos) valida cada
+   despliegue.
 
-On the free plan the service sleeps after a few idle minutes (the first request takes about a minute)
-and the free database expires after a limited time; Flyway recreates the schema on a new one.
+En el plan gratuito el servicio se duerme tras unos minutos sin uso (la primera petición tarda cerca de un minuto)
+y la base de datos gratuita expira después de un tiempo limitado; Flyway recrea el esquema en una nueva.
 
-Login and password reset are rate limited per client address in memory (`app.rate-limit`), so run a
-single instance; scaling out needs a shared store for the limits.
+El inicio de sesión y el restablecimiento de contraseña tienen límite de peticiones por dirección del cliente, en
+memoria (`app.rate-limit`), así que corre una sola instancia; escalar a varias requiere un almacén compartido para
+los límites.
 
-## Tests
+## Pruebas
 
 ```bash
 ./mvnw verify
 ```
 
-## Environment variables
+## Variables de entorno
 
-| Variable | Description |
+| Variable | Descripción |
 |---|---|
-| `SPRING_PROFILES_ACTIVE` | `prod` in containers (reads the variables below) |
-| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | PostgreSQL connection (`prod`; port defaults to 5432) |
-| `CORS_ALLOWED_ORIGINS` | Comma-separated web client origins (default `http://localhost:5173`; none in `prod` unless set) |
-| `PORT` | HTTP port (`prod`; defaults to 8080, Render sets it) |
-| `JWT_SECRET` | Base64, at least 32 bytes (`openssl rand -base64 32`) |
-| `JWT_MAX_SESSION_AGE` | How long after logging in a session ends, however often it refreshes (default `7d`; e.g. `12h`) |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Initial admin, created if none exists |
-| `MAIL_HOST` / `MAIL_PORT` / `MAIL_USERNAME` / `MAIL_PASSWORD` / `MAIL_FROM` | SMTP for password reset codes by email (optional; port defaults to 587 with STARTTLS) |
-| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` | Twilio for password reset codes by SMS (optional; number in E.164) |
-| `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | Cloudinary for product images (required for uploads in `prod`; elsewhere images go to `uploads/images`) |
-| `IMAGES_BASE_URL` | Public URL of the local images folder (default `http://localhost:8080/images`; not used with Cloudinary) |
-| `CASH_DRAWER_UNBALANCED_THRESHOLD` | Pesos of shortage or surplus from which a closed drawer counts as unbalanced in the cash closing (default `50.00`) |
+| `SPRING_PROFILES_ACTIVE` | `prod` en contenedores (lee las variables de abajo) |
+| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | Conexión a PostgreSQL (`prod`; el puerto por defecto es 5432) |
+| `CORS_ALLOWED_ORIGINS` | Orígenes del cliente web separados por comas (por defecto `http://localhost:5173`; ninguno en `prod` si no se define) |
+| `PORT` | Puerto HTTP (`prod`; por defecto 8080, Render lo define) |
+| `JWT_SECRET` | Base64, al menos 32 bytes (`openssl rand -base64 32`) |
+| `JWT_MAX_SESSION_AGE` | Cuánto dura una sesión desde el inicio de sesión, sin importar cuántas veces se renueve (por defecto `7d`; p. ej. `12h`) |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Admin inicial, se crea si no existe ninguno |
+| `MAIL_HOST` / `MAIL_PORT` / `MAIL_USERNAME` / `MAIL_PASSWORD` / `MAIL_FROM` | SMTP para los códigos de restablecimiento de contraseña y los avisos de cambios en la cuenta por correo (opcional; el puerto por defecto es 587 con STARTTLS) |
+| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` | Twilio para los códigos de restablecimiento por SMS (opcional; número en E.164) |
+| `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | Cloudinary para las imágenes de producto (obligatorio para subir imágenes en `prod`; en otros perfiles van a `uploads/images`) |
+| `IMAGES_BASE_URL` | URL pública de la carpeta local de imágenes (por defecto `http://localhost:8080/images`; no se usa con Cloudinary) |
+| `CASH_DRAWER_UNBALANCED_THRESHOLD` | Pesos de faltante o sobrante a partir de los cuales una caja cerrada cuenta como descuadrada en el corte de caja (por defecto `50.00`) |
 
-Without SMTP or Twilio settings, reset codes for that channel aren't sent; outside `prod` they are written to the log so the flow can be tried locally.
-Without Cloudinary settings, image uploads answer 503 in `prod` (Render's disk is wiped on every deploy).
+Sin configuración de SMTP o Twilio, los códigos de ese canal no se envían; fuera de `prod` se escriben en el log
+para poder probar el flujo en local.
+Sin configuración de Cloudinary, la subida de imágenes responde 503 en `prod` (el disco de Render se borra en cada
+despliegue).

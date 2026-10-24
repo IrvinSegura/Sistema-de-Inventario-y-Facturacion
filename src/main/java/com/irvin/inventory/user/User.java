@@ -47,6 +47,22 @@ public class User {
     @Column(nullable = false)
     private boolean active = true;
 
+    // Set when an admin resets the password to a temporary one; the user can't do anything else until
+    // they change it (PasswordChangeInterceptor), which clears it, as does a forgotten-password reset.
+    @Column(nullable = false)
+    private boolean passwordChangeRequired;
+
+    // Goes up when the password, role or status changes; access tokens carry the version they were issued
+    // with, and CredentialsVersionValidator refuses older ones.
+    @Column(nullable = false)
+    private int credentialsVersion;
+
+    // Access tokens issued before stop working (CredentialsVersionValidator). Refresh tokens are revoked
+    // separately (AuthService.revokeAllSessions).
+    public void invalidateIssuedTokens() {
+        credentialsVersion++;
+    }
+
     @CreationTimestamp
     @Column(nullable = false, updatable = false)
     private Instant createdAt;

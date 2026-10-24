@@ -35,7 +35,7 @@ public record PurchaseSearch(
             if (to != null) {
                 predicates.add(cb.lessThan(root.get("purchaseDate"), to));
             }
-            // No index on cancelled_at: purchases are few (a store records a handful a day), unlike sales.
+            // Uses the partial index ix_purchase_cancelled_at (V29).
             if (cancelledFrom != null) {
                 predicates.add(cb.greaterThanOrEqualTo(root.get("cancelledAt"), cancelledFrom));
             }

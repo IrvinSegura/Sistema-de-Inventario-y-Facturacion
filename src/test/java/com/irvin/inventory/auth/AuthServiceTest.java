@@ -91,6 +91,24 @@ class AuthServiceTest {
     }
 
     @Test
+    void aPasswordChangeDuringTheLoginEndsIt() {
+        user.setEmail("ana@test.com");
+        user.setPasswordHash("hash");
+        when(userRepository.findByEmail("ana@test.com")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("secret", "hash")).thenReturn(true);
+        // Committed while BCrypt checked the old password: the locked row has a newer credentials version.
+        User changed = new User();
+        changed.setId(USER_ID);
+        changed.setActive(true);
+        changed.invalidateIssuedTokens();
+        when(userRepository.findByIdForUpdate(USER_ID)).thenReturn(Optional.of(changed));
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("ana@test.com", "secret")))
+                .isInstanceOf(AuthenticationFailedException.class);
+        verify(refreshTokenRepository, never()).save(any(RefreshToken.class));
+    }
+
+    @Test
     void rotationKeepsTheLoginInstantAndNeverOutlivesTheSessionsMaximumAge() {
         RefreshToken token = storedToken(NOW.plusSeconds(60));
         // Logged in 29 days ago: the 7-day slide would pass the 30-day maximum.
