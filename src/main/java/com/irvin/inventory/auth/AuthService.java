@@ -62,7 +62,15 @@ public class AuthService {
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash()) || !user.isActive()) {
             throw new AuthenticationFailedException();
         }
-        return transactionTemplate.execute(status -> issueTokens(user, clock.instant()));
+        // Checked again under the user lock: a password reset or change, or a deactivation, committed
+        // while BCrypt ran must not leave this login a session its revocation missed.
+        return transactionTemplate.execute(status -> {
+            User locked = userRepository.findByIdForUpdate(user.getId()).orElseThrow(AuthenticationFailedException::new);
+            if (locked.getCredentialsVersion() != user.getCredentialsVersion() || !locked.isActive()) {
+                throw new AuthenticationFailedException();
+            }
+            return issueTokens(locked, clock.instant());
+        });
     }
 
     // Rotation: each refresh token works once. Reusing a ROTATED token signals theft, so every
